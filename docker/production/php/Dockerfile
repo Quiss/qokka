@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y \
  && rm -rf /var/lib/apt/lists/*
 
 # Install required PHP extensions
-RUN install-php-extensions intl bcmath gd redis imagick
+RUN install-php-extensions intl bcmath gd redis imagick pgsql
 
 # Copy optimized PHP configuration
 COPY docker/production/php/php-production.ini /usr/local/etc/php/conf.d/99-production.ini
