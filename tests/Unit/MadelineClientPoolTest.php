@@ -2,11 +2,14 @@
 
 namespace Tests\Unit;
 
+use Amp\Http\Client\HttpClient;
 use App\Contracts\MadelineClient;
 use App\Models\TelegramAccount;
 use App\Services\MadelineClientFactory;
 use App\Services\MadelineClientPool;
+use App\Telegram\ChannelSourceEventHandler;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 class MadelineClientPoolTest extends TestCase
 {
@@ -38,6 +41,17 @@ class MadelineClientPoolTest extends TestCase
 
         $this->assertSame($replacementClient, $pool->forAccount($account));
         $this->assertSame(2, $factory->calls);
+    }
+
+    public function test_telegram_bridge_reuses_a_dedicated_system_dns_http_client(): void
+    {
+        $bridgeHttpClient = new ReflectionMethod(ChannelSourceEventHandler::class, 'bridgeHttpClient');
+
+        $first = $bridgeHttpClient->invoke(null);
+        $second = $bridgeHttpClient->invoke(null);
+
+        $this->assertInstanceOf(HttpClient::class, $first);
+        $this->assertSame($first, $second);
     }
 
     private function fakeClient(): MadelineClient

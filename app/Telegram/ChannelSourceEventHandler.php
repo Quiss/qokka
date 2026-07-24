@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Telegram;
 
+use Amp\Http\Client\HttpClient;
+use Amp\Http\Client\HttpClientBuilder;
 use Amp\Http\Client\Request;
 use danog\MadelineProto\EventHandler\Attributes\Cron;
 use danog\MadelineProto\EventHandler\Attributes\Handler;
@@ -29,6 +31,8 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
     private array $allowedPeerIds = [];
 
     private int $subscriptionsRefreshedAt = 0;
+
+    private static ?HttpClient $bridgeHttpClient = null;
 
     public function onStart(): void
     {
@@ -228,7 +232,11 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
         $request->setHeader('X-Telegram-Nonce', $nonce);
         $request->setHeader('X-Telegram-Signature', $signature);
         $request->setBody($body);
-        $response = $this->getHTTPClient()->request($request);
+        $request->setTcpConnectTimeout(5);
+        $request->setTlsHandshakeTimeout(5);
+        $request->setTransferTimeout(30);
+        $request->setInactivityTimeout(15);
+        $response = self::bridgeHttpClient()->request($request);
         $responseBody = $response->getBody()->buffer();
 
         if ($response->getStatus() >= 400) {
@@ -242,6 +250,14 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
         $decoded = json_decode($responseBody, true, flags: JSON_THROW_ON_ERROR);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Bridge calls must use container DNS; MadelineProto's HTTP client intentionally resolves through DoH.
+     */
+    private static function bridgeHttpClient(): HttpClient
+    {
+        return self::$bridgeHttpClient ??= HttpClientBuilder::buildDefault();
     }
 
     private function isAssigned(int $peerId): bool
