@@ -37,6 +37,17 @@ services:
       - "traefik.http.middlewares.qokka-compress.compress.minresponsebodybytes=512"
 #      - "traefik.http.middlewares.qokka-auth.basicauth.users=${BASIC_AUTH_USERS}"
       - "traefik.http.routers.qokka.middlewares=qokka-compress,qokka-redirect"
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      OCTANE_SERVER: frankenphp
+      OCTANE_HTTPS: "true"
+      OCTANE_WORKERS: ${OCTANE_WORKERS:-6}
+      OCTANE_MAX_REQUESTS: ${OCTANE_MAX_REQUESTS:-1000}
+      AUTORUN_ENABLED: "true"
+      PHP_OPCACHE_ENABLE: 1
+      PHP_MEMORY_LIMIT: "256M"
+      XDG_CONFIG_HOME: /tmp
     volumes: *app-volumes
     networks:
       - traefiknet
