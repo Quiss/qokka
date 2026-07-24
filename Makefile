@@ -13,11 +13,24 @@ TIMESTAMP := $(shell date +%d%m%Y-%H%M%S)
 UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
+PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
+PHP_BOOTSTRAP := docker run --rm \
+	--user "$(UID):$(GID)" \
+	--env HOME=/tmp \
+	--env COMPOSER_HOME=/tmp/composer \
+	--volume "$(PWD):/var/www/html" \
+	--workdir /var/www/html \
+	--entrypoint /bin/sh \
+	$(PHP_BOOTSTRAP_IMAGE) -lc
 
 first:
-	docker run --rm -u "$(UID):$(GID)" -v "$(PWD):/var/www/html" -w /var/www/html laravelsail/php84-composer:latest composer install --ignore-platform-req=ext-intl
-	docker run --rm -u "$(UID):$(GID)" -v "$(PWD):/var/www/html" -w /var/www/html laravelsail/php84-composer:latest php artisan key:gen
-	docker run --rm -u "$(UID):$(GID)" -v "$(PWD):/var/www/html" -w /var/www/html laravelsail/php84-composer:latest php artisan octane:install
+	@test -f .env || cp .env.example .env
+	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-interaction'
+	@if ! grep -Eq '^APP_KEY=base64:.+$$' .env; then \
+		$(PHP_BOOTSTRAP) 'php artisan key:generate --force --no-interaction'; \
+	else \
+		echo "APP_KEY already exists; keeping it unchanged."; \
+	fi
 deploy:
 	git pull
 	docker compose exec app php artisan optimize
@@ -161,7 +174,7 @@ import-db:
 	vendor/bin/sail artisan migrate --force
 	@echo "Import completed"
 
-.PHONY: deploy deploy-full staging build \
+.PHONY: first deploy deploy-full staging build \
         backup backup-init backup-db backup-storage backup-cleanup backup-list \
         restore-db-latest restore-storage-latest \
         restart-horizon restart-scheduler restart-workers reload-all \
