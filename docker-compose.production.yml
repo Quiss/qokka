@@ -1,0 +1,188 @@
+x-app-volumes: &app-volumes
+  - .:/var/www/html
+
+services:
+  # Main application (FrankenPHP + Octane)
+  app:
+    image: ${APP_IMAGE:-channelbot-app}:latest
+    build:
+      context: .
+      dockerfile: docker/production/php/Dockerfile
+      args:
+        USER_ID: ${USER_ID:-1000}
+        GROUP_ID: ${GROUP_ID:-1000}
+    restart: unless-stopped
+    init: true
+    working_dir: /var/www/html
+    command: ["php", "artisan", "octane:start", "--server=frankenphp", "--host=0.0.0.0", "--port=8080", "--workers=${OCTANE_WORKERS:-6}", "--max-requests=${OCTANE_MAX_REQUESTS:-1000}"]
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qokka.rule=Host(`${APP_DOMAIN:-qokka.ru}`) || Host(`www.${APP_DOMAIN:-qokka.ru}`)"
+      - "traefik.http.routers.qokka.entrypoints=https"
+      - "traefik.http.routers.qokka.tls=true"
+      - "traefik.http.routers.qokka.tls.certresolver=le"
+      - "traefik.http.services.qokka.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.qokka-redirect.redirectregex.regex=^https://www\\.(.+)"
+      - "traefik.http.middlewares.qokka-redirect.redirectregex.replacement=https://$${1}"
+      - "traefik.http.middlewares.qokka-redirect.redirectregex.permanent=true"
+      - "traefik.http.middlewares.qokka-compress.compress=true"
+      - "traefik.http.middlewares.qokka-compress.compress.minresponsebodybytes=512"
+#      - "traefik.http.middlewares.qokka-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.routers.qokka.middlewares=qokka-compress,qokka-redirect"
+    volumes: *app-volumes
+    networks:
+      - traefiknet
+      - default
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Scheduler (cron)
+  scheduler:
+    image: ${APP_IMAGE:-channelbot-app}:latest
+    restart: unless-stopped
+    init: true
+    working_dir: /var/www/html
+    command: ["php", "artisan", "schedule:work", "--no-interaction"]
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    volumes: *app-volumes
+    networks:
+      - default
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Horizon (Laravel queue manager)
+  horizon:
+    image: ${APP_IMAGE:-channelbot-app}:latest
+    restart: unless-stopped
+    init: true
+    working_dir: /var/www/html
+    command: ["php", "artisan", "horizon", "--environment=production"]
+    stop_signal: SIGTERM
+    stop_grace_period: 370s
+    volumes: *app-volumes
+    networks:
+      - default
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "artisan", "horizon:status"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # MadelineProto listener (one process owns all active user sessions)
+  madeline:
+    image: ${APP_IMAGE:-channelbot-app}:latest
+    restart: unless-stopped
+    init: true
+    working_dir: /var/www/html
+    command: ["php", "artisan", "telegram:listen", "--no-interaction"]
+    stop_signal: SIGTERM
+    stop_grace_period: 120s
+    volumes: *app-volumes
+    networks:
+      - default
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # PostgreSQL
+  pgsql:
+    image: postgres:17
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      PGPASSWORD: '${DB_PASSWORD}'
+      POSTGRES_DB: '${DB_DATABASE}'
+      POSTGRES_USER: '${DB_USERNAME}'
+      POSTGRES_PASSWORD: '${DB_PASSWORD}'
+    volumes:
+      - vetify-pgsql:/var/lib/postgresql/data
+      - ./docker/production/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./docker/production/postgres/init-pghero.sql:/docker-entrypoint-initdb.d/init-pghero.sql:ro
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "${DB_DATABASE}", "-U", "${DB_USERNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Redis
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - vetify-redis:/data
+      - ./docker/production/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Mailpit (staging email catcher)
+#  mailpit:
+#    image: axllent/mailpit:latest
+#    restart: unless-stopped
+#    labels:
+#      - "traefik.enable=true"
+#      - "traefik.http.routers.mailpit.rule=Host(`mailpit.${APP_DOMAIN:-qokka.ru}`)"
+#      - "traefik.http.routers.mailpit.entrypoints=https"
+#      - "traefik.http.routers.mailpit.tls=true"
+#      - "traefik.http.routers.mailpit.tls.certresolver=le"
+#      - "traefik.http.services.mailpit.loadbalancer.server.port=8025"
+#      - "traefik.http.routers.mailpit.middlewares=qokka-auth"
+#    networks:
+#      - traefiknet
+#      - default
+
+  typesense:
+    image: 'typesense/typesense:27.1'
+    environment:
+      TYPESENSE_DATA_DIR: '${TYPESENSE_DATA_DIR:-/typesense-data}'
+      TYPESENSE_API_KEY: '${TYPESENSE_API_KEY:-xyz}'
+      TYPESENSE_ENABLE_CORS: '${TYPESENSE_ENABLE_CORS:-true}'
+    volumes:
+      - 'vetify-typesense:/typesense-data'
+    networks:
+      - default
+    healthcheck:
+      test: [ CMD, bash, -c, "exec 3<>/dev/tcp/localhost/8108 && printf 'GET /health HTTP/1.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep '200' && exec 3>&-" ]
+      retries: 5
+      timeout: 7s
+
+networks:
+  traefiknet:
+    external: true
+  default:
+    driver: bridge
+
+volumes:
+  vetify-pgsql:
+    driver: local
+  vetify-redis:
+    driver: local
+  vetify-typesense:
+    driver: local
