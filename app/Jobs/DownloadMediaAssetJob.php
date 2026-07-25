@@ -8,7 +8,10 @@ use App\Services\MadelineClientPool;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -21,6 +24,8 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
     public int $tries = 3;
 
     public int $timeout = 360;
+
+    public int $uniqueFor = 7200;
 
     /** @var list<int> */
     public array $backoff = [60, 300, 900];
@@ -60,9 +65,10 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         }
 
         $sourceMessage = $origin->sourceMessage;
-        $account = $sourceMessage?->sourceChannel->collectorTelegramAccount;
+        $sourceChannel = $sourceMessage?->sourceChannel;
+        $account = $sourceChannel?->collectorTelegramAccount;
 
-        if ($sourceMessage === null || $account === null || ! $account->is_active) {
+        if ($sourceMessage === null || $sourceChannel === null || $account === null || ! $account->is_active) {
             throw new RuntimeException('Для скачивания медиа не найден активный Telegram-аккаунт источника.');
         }
 
@@ -70,40 +76,70 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             throw new RuntimeException('Медиа превышает лимит Telegram 50 МБ.');
         }
 
-        $rawPayload = is_array($sourceMessage->raw_payload) ? $sourceMessage->raw_payload : [];
-        $reference = $this->downloadReference($origin, $rawPayload);
         $extension = $this->previewOnly ? 'jpg' : $this->extension($origin);
         $relativePath = 'telegram/'.($this->previewOnly ? 'previews' : 'media').'/'.now()->format('Y/m').'/'.Str::uuid().'.'.$extension;
         $absolutePath = Storage::disk('local')->path($relativePath);
+        $temporaryPath = Storage::disk('local')->path('telegram/tmp/'.Str::uuid().'.part');
         File::ensureDirectoryExists(dirname($absolutePath));
+        File::ensureDirectoryExists(dirname($temporaryPath));
 
         try {
-            $clientPool->forAccount($account)->downloadToFile($reference, $absolutePath);
+            $client = $clientPool->forAccount($account);
+            $freshMessage = $client->getChannelMessage(
+                $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
+                $sourceMessage->external_message_id,
+            );
+
+            if ($freshMessage === null || ! is_array($freshMessage['media'] ?? null)) {
+                throw new RuntimeException('Исходное сообщение с выбранным медиа больше недоступно в Telegram.');
+            }
+
+            $client->downloadToFile(
+                $this->downloadReference($origin, $freshMessage),
+                $temporaryPath,
+            );
+            $this->assertDownloadedFileIsComplete($origin, $temporaryPath);
+
+            if (! File::move($temporaryPath, $absolutePath)) {
+                throw new RuntimeException('Не удалось переместить загруженное медиа из временного файла.');
+            }
+
+            $metadata = Arr::except(
+                is_array($origin->metadata) ? $origin->metadata : [],
+                [$this->previewOnly ? 'preview_download_error' : 'download_error'],
+            );
+
+            DB::transaction(function () use ($origin, $relativePath, $absolutePath, $metadata): void {
+                if ($this->previewOnly) {
+                    $origin->update([
+                        'preview_disk' => 'local',
+                        'preview_path' => $relativePath,
+                        'preview_mime_type' => 'image/jpeg',
+                        'preview_downloaded_at' => now(),
+                        'preview_failed_at' => null,
+                        'metadata' => $metadata,
+                    ]);
+                } else {
+                    $origin->update([
+                        'disk' => 'local',
+                        'path' => $relativePath,
+                        'checksum' => hash_file('sha256', $absolutePath),
+                        'downloaded_at' => now(),
+                        'failed_at' => null,
+                        'metadata' => $metadata,
+                    ]);
+                }
+
+                $this->syncClones($origin->fresh());
+            });
         } catch (Throwable $exception) {
+            File::delete($absolutePath);
             $clientPool->forget($account);
 
             throw $exception;
+        } finally {
+            File::delete([$temporaryPath, $temporaryPath.'.lock']);
         }
-
-        if ($this->previewOnly) {
-            $origin->update([
-                'preview_disk' => 'local',
-                'preview_path' => $relativePath,
-                'preview_mime_type' => 'image/jpeg',
-                'preview_downloaded_at' => now(),
-                'preview_failed_at' => null,
-            ]);
-        } else {
-            $origin->update([
-                'disk' => 'local',
-                'path' => $relativePath,
-                'checksum' => hash_file('sha256', $absolutePath),
-                'downloaded_at' => now(),
-                'failed_at' => null,
-            ]);
-        }
-
-        $this->syncClones($origin->fresh());
     }
 
     public function failed(?Throwable $exception): void
@@ -126,15 +162,20 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 'metadata' => array_merge($metadata, ['download_error' => $exception?->getMessage()]),
             ]);
         $this->syncClones($origin->fresh());
+
+        Log::error('Telegram media download failed.', [
+            'media_asset_id' => $origin->id,
+            'source_message_id' => $origin->source_message_id,
+            'preview_only' => $this->previewOnly,
+            'error' => $exception?->getMessage(),
+        ]);
     }
 
     /** @param array<string, mixed> $rawMessage */
     private function downloadReference(MediaAsset $asset, array $rawMessage): mixed
     {
         if (! $this->previewOnly) {
-            $botApiFileId = data_get($asset->metadata, 'bot_api_file_id');
-
-            return is_string($botApiFileId) && $botApiFileId !== '' ? $botApiFileId : $rawMessage;
+            return $rawMessage;
         }
 
         $document = data_get($rawMessage, 'media.document');
@@ -185,6 +226,21 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             'video/mp4' => 'mp4',
             default => $asset->type === MediaType::Photo ? 'jpg' : 'bin',
         };
+    }
+
+    private function assertDownloadedFileIsComplete(MediaAsset $asset, string $path): void
+    {
+        $actualSize = File::size($path);
+
+        if ($actualSize <= 0) {
+            throw new RuntimeException('Telegram вернул пустой файл.');
+        }
+
+        if (! $this->previewOnly && ($asset->size_bytes ?? 0) > 0 && $actualSize !== $asset->size_bytes) {
+            throw new RuntimeException(
+                "Telegram загрузил файл не полностью: ожидалось {$asset->size_bytes} байт, получено {$actualSize}.",
+            );
+        }
     }
 
     private function syncClones(MediaAsset $origin): void

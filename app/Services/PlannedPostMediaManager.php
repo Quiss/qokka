@@ -7,6 +7,7 @@ use App\MediaType;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\StoryCandidate;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -72,7 +73,7 @@ class PlannedPostMediaManager
             $plannedPost->mediaAssets()->delete();
 
             $selectedAssets->each(function (MediaAsset $asset, int $index) use ($plannedPost): void {
-                $clone = $plannedPost->mediaAssets()->create([
+                $plannedPost->mediaAssets()->create([
                     'source_message_id' => $asset->source_message_id,
                     'origin_media_asset_id' => $asset->id,
                     'external_id' => $asset->external_id,
@@ -93,8 +94,8 @@ class PlannedPostMediaManager
                     'preview_failed_at' => $asset->preview_failed_at,
                 ]);
 
-                if ($clone->path === null) {
-                    DownloadMediaAssetJob::dispatch($clone->id)->onQueue('telegram')->afterCommit();
+                if ($asset->path === null) {
+                    DownloadMediaAssetJob::dispatch($asset->id)->onQueue('telegram')->afterCommit();
                 }
             });
         });
@@ -104,6 +105,14 @@ class PlannedPostMediaManager
     {
         return $plannedPost->mediaAssets()
             ->whereNull('path')
+            ->exists();
+    }
+
+    public function hasFailedSelection(PlannedPost $plannedPost): bool
+    {
+        return $plannedPost->mediaAssets()
+            ->whereNull('path')
+            ->whereNotNull('failed_at')
             ->exists();
     }
 
@@ -138,15 +147,35 @@ class PlannedPostMediaManager
 
     public function queueUnpreparedSelectionDownloads(PlannedPost $plannedPost): int
     {
-        $unpreparedAssets = $plannedPost->mediaAssets()
+        $originIds = $plannedPost->mediaAssets()
             ->whereNull('path')
+            ->get(['id', 'origin_media_asset_id'])
+            ->map(fn (MediaAsset $asset): int => $asset->origin_media_asset_id ?? $asset->id)
+            ->unique()
+            ->values();
+        $origins = MediaAsset::query()
+            ->whereKey($originIds)
             ->get();
 
-        $unpreparedAssets->each(
-            fn (MediaAsset $asset) => DownloadMediaAssetJob::dispatch($asset->id)->onQueue('telegram'),
-        );
+        $origins->each(function (MediaAsset $origin): void {
+            $metadata = Arr::except(
+                is_array($origin->metadata) ? $origin->metadata : [],
+                ['download_error'],
+            );
+            $origin->update([
+                'failed_at' => null,
+                'metadata' => $metadata,
+            ]);
+            MediaAsset::query()
+                ->where('origin_media_asset_id', $origin->id)
+                ->update([
+                    'failed_at' => null,
+                    'metadata' => $metadata,
+                ]);
+            DownloadMediaAssetJob::dispatch($origin->id)->onQueue('telegram');
+        });
 
-        return $unpreparedAssets->count();
+        return $origins->count();
     }
 
     /** @return Collection<int, MediaAsset> */

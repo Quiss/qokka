@@ -63,6 +63,11 @@ class MadelineClientPoolTest extends TestCase
                 return $path;
             }
 
+            public function getChannelMessage(int|string $peer, int $messageId): ?array
+            {
+                return null;
+            }
+
             public function getHistory(int|string $peer, int $offsetId, int $limit): array
             {
                 return [];

@@ -28,10 +28,10 @@ class ApprovePlannedPost
         $this->mediaManager->syncAvailableOrigins($plannedPost);
 
         if ($this->mediaManager->hasUnpreparedSelection($plannedPost)) {
-            $this->mediaManager->queueUnpreparedSelectionDownloads($plannedPost);
-
             throw ValidationException::withMessages([
-                'media' => 'Выбранное медиа ещё не готово. Повторная загрузка поставлена в очередь — попробуйте одобрить публикацию через минуту.',
+                'media' => $this->mediaManager->hasFailedSelection($plannedPost)
+                    ? 'Не удалось загрузить выбранное медиа из Telegram. Нажмите «Повторить загрузку медиа» и дождитесь завершения.'
+                    : 'Выбранное медиа загружается из Telegram. Дождитесь завершения и повторите одобрение.',
             ]);
         }
 

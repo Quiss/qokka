@@ -4,6 +4,7 @@ namespace App\Filament\Resources\PlannedPosts\Tables;
 
 use App\Actions\ApprovePlannedPost;
 use App\Actions\RequestPlannedPostRewrite;
+use App\Models\MediaAsset;
 use App\Models\ModerationAction;
 use App\Models\PlannedPost;
 use App\Models\PlannedPostRevision;
@@ -89,6 +90,21 @@ class PlannedPostsTable
                             ->badge()
                             ->placeholder('Рисков нет')
                             ->limitList(2),
+                        TextColumn::make('media_preparation_status')
+                            ->label('Медиа')
+                            ->state(self::mediaPreparationStatus(...))
+                            ->badge()
+                            ->formatStateUsing(fn (?string $state): string => match ($state) {
+                                'failed' => 'Ошибка загрузки медиа',
+                                'pending' => 'Медиа загружается',
+                                default => '',
+                            })
+                            ->color(fn (?string $state): string => $state === 'failed' ? 'danger' : 'warning')
+                            ->icon(fn (?string $state): ?string => match ($state) {
+                                'failed' => 'heroicon-m-exclamation-triangle',
+                                'pending' => 'heroicon-m-arrow-path',
+                                default => null,
+                            }),
                     ])->space(1)->grow(false),
                 ])->from('md'),
                 TextColumn::make('failure_reason')
@@ -161,6 +177,26 @@ class PlannedPostsTable
                         }
 
                         Notification::make()->title('Текст и медиа сохранены')->success()->send();
+                    }),
+                Action::make('retry_media_download')
+                    ->label('Повторить загрузку медиа')
+                    ->icon('heroicon-m-arrow-path')
+                    ->color('warning')
+                    ->requiresConfirmation()
+                    ->modalDescription('Исходное сообщение будет заново получено из Telegram, после чего загрузка выбранного медиа повторится.')
+                    ->visible(fn (PlannedPost $record): bool => ! self::isImmutable($record)
+                        && $record->mediaAssets->contains(
+                            fn (MediaAsset $asset): bool => blank($asset->path) && $asset->failed_at !== null,
+                        ))
+                    ->action(function (PlannedPost $record, PlannedPostMediaManager $mediaManager): void {
+                        $queued = $mediaManager->queueUnpreparedSelectionDownloads($record);
+
+                        Notification::make()
+                            ->title($queued > 0
+                                ? 'Повторная загрузка медиа поставлена в очередь'
+                                : 'Нет медиа для повторной загрузки')
+                            ->status($queued > 0 ? 'success' : 'warning')
+                            ->send();
                     }),
                 Action::make('approve')
                     ->label('Одобрить')
@@ -277,6 +313,20 @@ class PlannedPostsTable
             'needs_reschedule' => 'Нужно новое время',
             default => (string) ($state->value ?? $state),
         };
+    }
+
+    private static function mediaPreparationStatus(PlannedPost $record): ?string
+    {
+        $unpreparedMedia = $record->mediaAssets
+            ->filter(fn (MediaAsset $asset): bool => blank($asset->path));
+
+        if ($unpreparedMedia->isEmpty()) {
+            return null;
+        }
+
+        return $unpreparedMedia->contains(fn (MediaAsset $asset): bool => $asset->failed_at !== null)
+            ? 'failed'
+            : 'pending';
     }
 
     private static function isImmutable(PlannedPost $record): bool

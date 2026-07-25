@@ -88,6 +88,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $account = TelegramAccount::factory()->create();
         $channel = SourceChannel::factory()->create([
             'telegram_peer_id' => -100123,
+            'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
         $payload = app(TelegramMessagePayloadFactory::class)->fromRawMessage($account, $channel, [
@@ -207,8 +208,16 @@ class TelegramMediaWorkflowTest extends TestCase
         $secondSource = SourcePost::factory()->create();
         $candidate->sourcePosts()->attach($firstSource, ['is_primary' => true]);
         $candidate->sourcePosts()->attach($secondSource, ['is_primary' => false]);
-        $firstAsset = MediaAsset::factory()->for($firstSource, 'mediable')->create(['sort_order' => 0]);
-        $secondAsset = MediaAsset::factory()->for($secondSource, 'mediable')->create(['sort_order' => 0]);
+        $firstAsset = MediaAsset::factory()->for($firstSource, 'mediable')->create([
+            'path' => null,
+            'downloaded_at' => null,
+            'sort_order' => 0,
+        ]);
+        $secondAsset = MediaAsset::factory()->for($secondSource, 'mediable')->create([
+            'path' => null,
+            'downloaded_at' => null,
+            'sort_order' => 0,
+        ]);
         $post = PlannedPost::factory()->create([
             'content_plan_id' => $plan->id,
             'story_candidate_id' => $candidate->id,
@@ -219,6 +228,14 @@ class TelegramMediaWorkflowTest extends TestCase
         $selected = $post->mediaAssets()->orderBy('sort_order')->get();
         $this->assertSame([$secondAsset->id, $firstAsset->id], $selected->pluck('origin_media_asset_id')->all());
         $this->assertSame([0, 1], $selected->pluck('sort_order')->all());
+        Queue::assertPushed(
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $firstAsset->id,
+        );
+        Queue::assertPushed(
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $secondAsset->id,
+        );
     }
 
     public function test_post_cannot_be_approved_while_selected_media_is_not_ready(): void
@@ -243,14 +260,10 @@ class TelegramMediaWorkflowTest extends TestCase
             $this->fail('Approval should fail while selected media is not ready.');
         } catch (ValidationException $exception) {
             $this->assertSame(
-                ['Выбранное медиа ещё не готово. Повторная загрузка поставлена в очередь — попробуйте одобрить публикацию через минуту.'],
+                ['Выбранное медиа загружается из Telegram. Дождитесь завершения и повторите одобрение.'],
                 $exception->errors()['media'],
             );
-            Queue::assertPushedOn(
-                'telegram',
-                DownloadMediaAssetJob::class,
-                fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $mediaAsset->id,
-            );
+            Queue::assertNotPushed(DownloadMediaAssetJob::class);
         }
     }
 
@@ -286,6 +299,7 @@ class TelegramMediaWorkflowTest extends TestCase
             'path' => null,
             'checksum' => null,
             'downloaded_at' => null,
+            'size_bytes' => strlen('downloaded'),
             'metadata' => ['bot_api_file_id' => 'first-file'],
         ]);
         $secondAsset = MediaAsset::factory()->for($secondPost, 'mediable')->create([
@@ -293,12 +307,22 @@ class TelegramMediaWorkflowTest extends TestCase
             'path' => null,
             'checksum' => null,
             'downloaded_at' => null,
+            'size_bytes' => strlen('downloaded'),
             'metadata' => ['bot_api_file_id' => 'second-file'],
         ]);
+        $downloadedMessageIds = [];
         $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->twice()
+            ->andReturnUsing(fn (int|string $peer, int $messageId): array => [
+                '_' => 'message',
+                'id' => $messageId,
+                'media' => ['_' => 'messageMediaDocument'],
+            ]);
         $client->shouldReceive('downloadToFile')
             ->twice()
-            ->andReturnUsing(function (mixed $media, string $path): string {
+            ->andReturnUsing(function (mixed $media, string $path) use (&$downloadedMessageIds): string {
+                $downloadedMessageIds[] = $media['id'];
                 File::put($path, 'downloaded');
 
                 return $path;
@@ -314,6 +338,68 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertNotNull($secondAsset->fresh()->path);
         Storage::disk('local')->assertExists($firstAsset->fresh()->path);
         Storage::disk('local')->assertExists($secondAsset->fresh()->path);
+        $this->assertSame([100, 101], $downloadedMessageIds);
+    }
+
+    public function test_download_job_removes_partial_file_after_telegram_cdn_failure(): void
+    {
+        Storage::fake('local');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Видео',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+            'metadata' => ['bot_api_file_id' => 'stale-file-id'],
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturn([
+                '_' => 'message',
+                'id' => 100,
+                'media' => ['_' => 'messageMediaDocument'],
+            ]);
+        $client->shouldReceive('downloadToFile')
+            ->once()
+            ->withArgs(fn (mixed $media): bool => is_array($media) && $media['id'] === 100)
+            ->andReturnUsing(function (mixed $media, string $path): never {
+                File::put($path, 'partial-video');
+
+                throw new \RuntimeException('VOLUME_LOC_NOT_FOUND');
+            });
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+
+        try {
+            (new DownloadMediaAssetJob($asset->id))->handle($pool);
+            $this->fail('The Telegram CDN failure should be propagated for a queued retry.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('VOLUME_LOC_NOT_FOUND', $exception->getMessage());
+        }
+
+        $this->assertNull($asset->fresh()->path);
+        $this->assertSame([], Storage::disk('local')->allFiles('telegram/tmp'));
+        $this->assertSame([], Storage::disk('local')->allFiles('telegram/media'));
     }
 
     public function test_existing_video_file_is_synced_to_planned_post_without_additional_processing(): void

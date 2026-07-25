@@ -491,7 +491,7 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertNull($riskyPost->fresh()->override_reason);
     }
 
-    public function test_approval_action_explains_an_unprepared_video_and_retries_its_download(): void
+    public function test_approval_action_explains_failed_media_and_retry_is_an_explicit_action(): void
     {
         Queue::fake();
         $user = User::factory()->create(['is_active' => true]);
@@ -514,6 +514,7 @@ class EditorialPlanEnhancementsTest extends TestCase
             'type' => MediaType::Video,
             'path' => null,
             'downloaded_at' => null,
+            'failed_at' => now(),
             'mime_type' => 'video/mp4',
         ]);
         $this->actingAs($user);
@@ -527,6 +528,16 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertNotified('Публикация не одобрена');
 
         $this->assertSame(PlannedPostStatus::FinalReview, $plannedPost->fresh()->status);
+        Queue::assertNotPushed(DownloadMediaAssetJob::class);
+
+        Livewire::test(PlannedPostsRelationManager::class, [
+            'ownerRecord' => $plan,
+            'pageClass' => EditContentPlan::class,
+        ])
+            ->mountAction(TestAction::make('retry_media_download')->table($plannedPost))
+            ->callMountedAction()
+            ->assertNotified('Повторная загрузка медиа поставлена в очередь');
+
         Queue::assertPushedOn(
             'telegram',
             DownloadMediaAssetJob::class,

@@ -14,6 +14,19 @@ class MadelineProtoClient implements MadelineClient
         return $this->api->downloadToFile($media, $path);
     }
 
+    public function getChannelMessage(int|string $peer, int $messageId): ?array
+    {
+        $response = $this->api->channels->getMessages(
+            channel: $peer,
+            id: [$messageId],
+        );
+        $message = collect($response['messages'] ?? [])
+            ->first(fn (array $message): bool => ($message['_'] ?? null) === 'message'
+                && (int) ($message['id'] ?? 0) === $messageId);
+
+        return $message;
+    }
+
     public function getHistory(int|string $peer, int $offsetId, int $limit): array
     {
         return $this->api->messages->getHistory(
