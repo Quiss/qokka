@@ -17,9 +17,11 @@ use App\Filament\Resources\ContentPlans\RelationManagers\StoryCandidatesRelation
 use App\Filament\Resources\PlannedPosts\Pages\EditPlannedPost;
 use App\Filament\Resources\SourceChannels\Pages\EditSourceChannel;
 use App\Filament\Resources\SourceChannels\RelationManagers\PostsRelationManager;
+use App\Jobs\DownloadMediaAssetJob;
 use App\Jobs\GenerateCandidateBatchJob;
 use App\Jobs\ReplenishContentPlanCandidatesJob;
 use App\Jobs\RewritePlannedPostJob;
+use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\Delivery;
 use App\Models\MediaAsset;
@@ -40,6 +42,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -416,6 +419,7 @@ class EditorialPlanEnhancementsTest extends TestCase
 
     public function test_approval_modal_is_only_shown_for_posts_with_risks_and_comment_is_optional(): void
     {
+        Storage::fake('local');
         $user = User::factory()->create(['is_active' => true]);
         $plan = ContentPlan::factory()->create([
             'status' => ContentPlanStatus::FinalReview,
@@ -446,6 +450,20 @@ class EditorialPlanEnhancementsTest extends TestCase
             'status' => PlannedPostStatus::Blocked,
             'risk_flags' => ['source_conflict'],
         ]);
+        Storage::disk('local')->put('telegram/video.mp4', 'original-video');
+        $sourcePost = SourcePost::factory()->create();
+        $sourceVideo = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => 'telegram/video.mp4',
+            'mime_type' => 'video/mp4',
+        ]);
+        MediaAsset::factory()->for($safePost, 'mediable')->create([
+            'origin_media_asset_id' => $sourceVideo->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
 
         $this->actingAs($user);
 
@@ -471,6 +489,49 @@ class EditorialPlanEnhancementsTest extends TestCase
 
         $this->assertSame(PlannedPostStatus::Approved, $riskyPost->fresh()->status);
         $this->assertNull($riskyPost->fresh()->override_reason);
+    }
+
+    public function test_approval_action_explains_an_unprepared_video_and_retries_its_download(): void
+    {
+        Queue::fake();
+        $user = User::factory()->create(['is_active' => true]);
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::FinalReview,
+            'slot_schedule' => [now()->addHour()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Selected,
+        ]);
+        $plannedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+            'scheduled_at' => now()->addHour(),
+            'status' => PlannedPostStatus::FinalReview,
+            'risk_flags' => [],
+        ]);
+        $video = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $this->actingAs($user);
+
+        Livewire::test(PlannedPostsRelationManager::class, [
+            'ownerRecord' => $plan,
+            'pageClass' => EditContentPlan::class,
+        ])
+            ->mountAction(TestAction::make('approve')->table($plannedPost))
+            ->assertActionNotMounted()
+            ->assertNotified('Публикация не одобрена');
+
+        $this->assertSame(PlannedPostStatus::FinalReview, $plannedPost->fresh()->status);
+        Queue::assertPushedOn(
+            'telegram',
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $video->id && ! $job->previewOnly,
+        );
     }
 
     public function test_partially_moderated_candidate_batch_can_be_queued_for_regeneration_from_admin(): void

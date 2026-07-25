@@ -136,6 +136,19 @@ class PlannedPostMediaManager
             });
     }
 
+    public function queueUnpreparedSelectionDownloads(PlannedPost $plannedPost): int
+    {
+        $unpreparedAssets = $plannedPost->mediaAssets()
+            ->whereNull('path')
+            ->get();
+
+        $unpreparedAssets->each(
+            fn (MediaAsset $asset) => DownloadMediaAssetJob::dispatch($asset->id)->onQueue('telegram'),
+        );
+
+        return $unpreparedAssets->count();
+    }
+
     /** @return Collection<int, MediaAsset> */
     public function availableAssets(PlannedPost $plannedPost): Collection
     {

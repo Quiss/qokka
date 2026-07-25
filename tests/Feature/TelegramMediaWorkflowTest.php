@@ -223,6 +223,7 @@ class TelegramMediaWorkflowTest extends TestCase
 
     public function test_post_cannot_be_approved_while_selected_media_is_not_ready(): void
     {
+        Queue::fake();
         $user = User::factory()->create();
         $plan = ContentPlan::factory()->create();
         $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
@@ -232,14 +233,25 @@ class TelegramMediaWorkflowTest extends TestCase
             'status' => PlannedPostStatus::FinalReview,
             'risk_flags' => [],
         ]);
-        MediaAsset::factory()->for($post, 'mediable')->create([
+        $mediaAsset = MediaAsset::factory()->for($post, 'mediable')->create([
             'path' => null,
             'downloaded_at' => null,
         ]);
 
-        $this->expectException(ValidationException::class);
-
-        app(ApprovePlannedPost::class)->approve($post, $user);
+        try {
+            app(ApprovePlannedPost::class)->approve($post, $user);
+            $this->fail('Approval should fail while selected media is not ready.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['Выбранное медиа ещё не готово. Повторная загрузка поставлена в очередь — попробуйте одобрить публикацию через минуту.'],
+                $exception->errors()['media'],
+            );
+            Queue::assertPushedOn(
+                'telegram',
+                DownloadMediaAssetJob::class,
+                fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $mediaAsset->id,
+            );
+        }
     }
 
     public function test_download_jobs_reuse_one_pooled_client_for_the_same_account(): void

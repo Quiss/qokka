@@ -28,6 +28,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class PlannedPostsTable
 {
@@ -180,8 +181,16 @@ class PlannedPostsTable
                         $user = auth()->user();
 
                         if ($user instanceof User) {
-                            $approvePlannedPost->approve($record, $user, $data['override_reason'] ?? null);
-                            Notification::make()->title('Публикация одобрена')->success()->send();
+                            try {
+                                $approvePlannedPost->approve($record, $user, $data['override_reason'] ?? null);
+                                Notification::make()->title('Публикация одобрена')->success()->send();
+                            } catch (ValidationException $exception) {
+                                Notification::make()
+                                    ->title('Публикация не одобрена')
+                                    ->body(self::validationMessage($exception))
+                                    ->danger()
+                                    ->send();
+                            }
                         }
                     }),
                 Action::make('rewrite')
@@ -293,5 +302,12 @@ class PlannedPostsTable
             ->implode('; ');
 
         return 'ИИ отметил: '.$risks.'. Если вы проверили текст, публикацию можно одобрить без комментария.';
+    }
+
+    private static function validationMessage(ValidationException $exception): string
+    {
+        $message = collect($exception->errors())->flatten()->first();
+
+        return is_string($message) ? $message : 'Проверьте данные публикации и повторите попытку.';
     }
 }

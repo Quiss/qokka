@@ -28,8 +28,10 @@ class ApprovePlannedPost
         $this->mediaManager->syncAvailableOrigins($plannedPost);
 
         if ($this->mediaManager->hasUnpreparedSelection($plannedPost)) {
+            $this->mediaManager->queueUnpreparedSelectionDownloads($plannedPost);
+
             throw ValidationException::withMessages([
-                'media' => 'Выбранное медиа ещё скачивается или загрузилось с ошибкой. Дождитесь завершения либо удалите его.',
+                'media' => 'Выбранное медиа ещё не готово. Повторная загрузка поставлена в очередь — попробуйте одобрить публикацию через минуту.',
             ]);
         }
 
