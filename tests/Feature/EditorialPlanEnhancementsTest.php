@@ -31,7 +31,7 @@ use App\Models\User;
 use App\PlannedPostStatus;
 use Filament\Actions\Testing\TestAction;
 use Filament\Forms\Components\DateTimePicker;
-use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\ViewField;
 use Filament\Schemas\Components\View;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -320,7 +320,7 @@ class EditorialPlanEnhancementsTest extends TestCase
         $mountedSchemaName = $relationManager->getMountedActionSchemaName();
         $this->assertNotNull($mountedSchemaName);
         $schemaComponents = $relationManager->getSchema($mountedSchemaName)?->getComponents();
-        $this->assertInstanceOf(Textarea::class, $schemaComponents[0] ?? null);
+        $this->assertInstanceOf(MarkdownEditor::class, $schemaComponents[0] ?? null);
         $this->assertInstanceOf(ViewField::class, $schemaComponents[1] ?? null);
         $this->assertInstanceOf(View::class, $schemaComponents[2] ?? null);
 

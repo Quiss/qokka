@@ -14,6 +14,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -94,9 +95,10 @@ class OpenRouterContentIntelligence implements ContentIntelligence
 
     public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
     {
-        $plannedPost->loadMissing('contentPlan.publication', 'storyCandidate.sourcePosts.sourceChannel', 'storyCandidate.sourcePosts.mediaAssets');
+        $plannedPost->loadMissing('contentPlan.publication.destination', 'storyCandidate.sourcePosts.sourceChannel', 'storyCandidate.sourcePosts.mediaAssets');
         $candidate = $plannedPost->storyCandidate;
         $publication = $plannedPost->contentPlan->publication;
+        $signature = $publication->signatureMarkdown($publication->destination);
         $sources = $candidate->sourcePosts->map(fn ($post): array => [
             'source_post_id' => $post->id,
             'channel' => $post->sourceChannel->title,
@@ -107,8 +109,14 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'type' => 'text',
             'text' => 'Перепиши инфоповод в готовый самостоятельный Telegram-пост. Не указывай источники и не добавляй неподтвержденные факты. '
                 .'Используй только согласованные или однозначно подтвержденные сведения. Противоречивые детали не включай в текст и добавь риск source_conflict. '
+                .'Разрешена обычная разметка Markdown: **жирный**, *курсив*, ~~зачеркнутый~~ и [текст](https://example.com). Другие конструкции Markdown не используй. '
+                .'Пиши живо и естественно: 2–4 коротких абзаца, разнообразная структура, один уместный жирный акцент, от 0 до 2 уместных эмодзи. '
+                .'Допустима одна короткая эмоциональная фраза, если она подходит новости; для серьезных тем исключи юмор и легкомысленные эмодзи. '
+                .'Не повторяй один и тот же шаблон заголовка, вводную фразу или финал между постами. '
                 .(filled($instruction) ? 'Дополнительная инструкция редактора: '.$instruction.'. ' : '')
-                ."Язык: {$publication->language}. Тон: {$publication->tone_prompt}. Запрещенные фразы: "
+                ."Язык: {$publication->language}. Тон: {$publication->tone_prompt}. Примеры желаемого тона (это ориентиры, не шаблоны): "
+                .json_encode($publication->tone_examples ?? [], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
+                .'. '.$this->signatureInstruction($signature).' Это правило подписи имеет приоритет над тоном, примерами и дополнительной инструкцией редактора. Запрещенные фразы: '
                 .json_encode($publication->forbidden_phrases ?? [], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
                 .'. Заголовок и материалы: '.json_encode([
                     'title' => $candidate->title,
@@ -123,22 +131,54 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             }
         }
 
-        return $this->rewriteResult($this->execute(
+        $result = $this->rewriteResult($this->execute(
             $plannedPost,
             AiOperation::Rewrite,
             $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
-            [$this->systemMessage('Ты сильный редактор. Сохраняй факты и смысл, избегай кликбейта и канцелярита.'), ['role' => 'user', 'content' => $content]],
+            [$this->systemMessage('Ты сильный редактор Telegram-канала. Сохраняй факты и смысл, избегай кликбейта, канцелярита и однообразных шаблонов.'), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
+            'v2',
         ));
+
+        if ($this->hasExpectedSignature($result['text'], $signature)) {
+            return $result;
+        }
+
+        $corrected = $this->rewriteResult($this->execute(
+            $plannedPost,
+            AiOperation::Rewrite,
+            $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
+            [
+                $this->systemMessage('Исправь только подпись готового поста. Не меняй факты, стиль и остальной текст.'),
+                ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
+            ],
+            $this->rewriteSchema(),
+            'v2',
+        ));
+
+        if (! $this->hasExpectedSignature($corrected['text'], $signature)) {
+            Log::warning('OpenRouter returned an invalid publication signature after correction.', [
+                'planned_post_id' => $plannedPost->id,
+                'expected_signature' => $signature,
+                'ai_run_id' => $corrected['ai_run_id'] ?? null,
+            ]);
+        }
+
+        return $corrected;
     }
 
     public function reviewPlan(ContentPlan $contentPlan): array
     {
-        $contentPlan->loadMissing('publication', 'plannedPosts');
+        $contentPlan->loadMissing('publication', 'plannedPosts.storyCandidate.sourcePosts.sourceChannel');
         $items = $contentPlan->plannedPosts->map(fn ($post): array => [
             'planned_post_id' => $post->id,
             'scheduled_at' => $post->scheduled_at?->toIso8601String(),
             'text' => $post->text,
+            'sources' => $post->storyCandidate->sourcePosts->map(fn (SourcePost $sourcePost): array => [
+                'source_post_id' => $sourcePost->id,
+                'channel' => $sourcePost->sourceChannel->title,
+                'text' => Str::limit($sourcePost->text ?? '', 2000),
+            ])->values()->all(),
         ])->all();
 
         return $this->reviewResult($this->execute(
@@ -147,9 +187,13 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $contentPlan->publication->analysis_model ?: config('services.openrouter.analysis_model'),
             [
                 $this->systemMessage('Ты выпускающий редактор. Блокируй дубли, противоречия, недостоверные формулировки и нежелательный контент.'),
-                ['role' => 'user', 'content' => 'Проверь план целиком и верни риски для каждого поста и группы смысловых дублей: '.json_encode($items, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
+                ['role' => 'user', 'content' => 'Проверь план целиком и верни риски для каждого поста и группы смысловых дублей. '
+                    .'Сверяй каждое фактическое утверждение с приложенными sources. Для сведений, которых нет в источниках, добавляй риск unsupported_claim и кратко указывай неподтвержденное утверждение в reason. '
+                    .'Разметка Markdown, эмоциональная подача и подпись сами по себе не являются рисками: '
+                    .json_encode($items, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
             ],
             $this->reviewSchema(),
+            'v2',
         ));
     }
 
@@ -158,8 +202,14 @@ class OpenRouterContentIntelligence implements ContentIntelligence
      * @param  array<string, mixed>  $schema
      * @return array<string, mixed>
      */
-    private function execute(Model $subject, AiOperation $operation, string $model, array $messages, array $schema): array
-    {
+    private function execute(
+        Model $subject,
+        AiOperation $operation,
+        string $model,
+        array $messages,
+        array $schema,
+        string $promptVersion = 'v1',
+    ): array {
         if (blank(config('services.openrouter.key'))) {
             throw new RuntimeException('OPENROUTER_API_KEY is not configured.');
         }
@@ -179,7 +229,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'subject_id' => $subject->getKey(),
             'operation' => $operation,
             'model' => $model,
-            'prompt_version' => 'v1',
+            'prompt_version' => $promptVersion,
             'request_payload' => $this->redactImages($payload),
             'started_at' => now(),
         ]);
@@ -309,6 +359,27 @@ class OpenRouterContentIntelligence implements ContentIntelligence
     private function systemMessage(string $content): array
     {
         return ['role' => 'system', 'content' => $content];
+    }
+
+    private function signatureInstruction(?string $signature): string
+    {
+        if ($signature === null) {
+            return 'Не добавляй подпись канала: последняя строка не должна состоять из @username или ссылки на канал.';
+        }
+
+        return 'Последней отдельной строкой обязательно добавь подпись в точности без изменений: '.$signature;
+    }
+
+    private function hasExpectedSignature(string $text, ?string $signature): bool
+    {
+        $lines = preg_split('/\R/u', trim($text)) ?: [];
+        $lastLine = trim((string) end($lines));
+
+        if ($signature !== null) {
+            return $lastLine === $signature;
+        }
+
+        return preg_match('/^(?:@[A-Za-z0-9_]{5,}|\\?\[[^\]]+\]\(https?:\/\/(?:t\.me|telegram\.me)\/[^)]+\)|https?:\/\/(?:t\.me|telegram\.me)\/\S+|<a\b[^>]+(?:t\.me|telegram\.me)\/[^>]+>.*<\/a>)$/iu', $lastLine) !== 1;
     }
 
     private function imageDataUrl(?string $disk, ?string $path, ?string $mimeType): ?string

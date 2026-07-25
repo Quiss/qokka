@@ -4,6 +4,7 @@ namespace Database\Factories;
 
 use App\Models\Publication;
 use App\Models\SourceGroup;
+use App\PublicationSignatureMode;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -35,6 +36,7 @@ class PublicationFactory extends Factory
             'reserve_multiplier' => 1.5,
             'media_caption_limit' => 900,
             'show_source_attribution' => false,
+            'signature_mode' => PublicationSignatureMode::None,
             'is_active' => true,
         ];
     }

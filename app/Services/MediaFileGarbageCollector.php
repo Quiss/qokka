@@ -17,14 +17,14 @@ class MediaFileGarbageCollector
      */
     public function pathsFor(Collection $mediaAssets): array
     {
-        return $mediaAssets
+        return array_values($mediaAssets
             ->flatMap(fn (MediaAsset $mediaAsset): array => array_filter([
                 ['disk' => $mediaAsset->disk, 'path' => $mediaAsset->path],
                 ['disk' => $mediaAsset->preview_disk ?: $mediaAsset->disk, 'path' => $mediaAsset->preview_path],
             ], fn (array $file): bool => filled($file['path'])))
             ->unique(fn (array $file): string => $file['disk'].':'.$file['path'])
             ->values()
-            ->all();
+            ->all());
     }
 
     /**

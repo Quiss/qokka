@@ -5,12 +5,16 @@ namespace Tests\Feature;
 use App\Actions\GenerateCandidateBatch;
 use App\Contracts\ContentIntelligence;
 use App\MediaType;
+use App\Models\AiRun;
 use App\Models\ContentPlan;
+use App\Models\Destination;
 use App\Models\PlannedPost;
 use App\Models\Publication;
 use App\Models\SourceChannel;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
+use App\Models\StoryCandidate;
+use App\PublicationSignatureMode;
 use App\Services\ContentPlanSlotGenerator;
 use App\Services\OpenRouterContentIntelligence;
 use Carbon\CarbonImmutable;
@@ -151,6 +155,103 @@ class ContentPlanningTest extends TestCase
         ));
     }
 
+    public function test_rewrite_uses_markdown_tone_rules_and_retries_an_invalid_signature_once(): void
+    {
+        Http::preventStrayRequests();
+        config([
+            'services.openrouter.key' => 'test-key',
+            'services.openrouter.url' => 'https://openrouter.test/api/v1',
+            'services.telegram.messenger_base_url' => 'https://t.me',
+        ]);
+        $publication = Publication::factory()->create([
+            'signature_mode' => PublicationSignatureMode::Link,
+            'signature_label' => 'ПокаТренд',
+            'tone_examples' => ['Коротко и живо'],
+        ]);
+        Destination::factory()->create([
+            'publication_id' => $publication->id,
+            'external_id' => '@PokaTrend',
+        ]);
+        $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create([
+            'text' => 'Компания представила новый продукт.',
+        ]);
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $plannedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+        Http::fake([
+            'https://openrouter.test/*' => Http::sequence()
+                ->push($this->rewriteResponse('**Новый продукт уже представлен**'))
+                ->push($this->rewriteResponse("**Новый продукт уже представлен**\n\n[ПокаТренд](https://t.me/PokaTrend)")),
+        ]);
+
+        $result = app(OpenRouterContentIntelligence::class)->rewrite($plannedPost);
+
+        $this->assertSame(
+            "**Новый продукт уже представлен**\n\n[ПокаТренд](https://t.me/PokaTrend)",
+            $result['text'],
+        );
+        Http::assertSentCount(2);
+        Http::assertSent(fn (Request $request): bool => str_contains(
+            (string) data_get($request->data(), 'messages.1.content.0.text'),
+            'Разрешена обычная разметка Markdown',
+        ) && str_contains(
+            (string) data_get($request->data(), 'messages.1.content.0.text'),
+            '[ПокаТренд](https://t.me/PokaTrend)',
+        ));
+        $this->assertSame(['v2', 'v2'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+    }
+
+    public function test_publication_builds_each_configured_signature_variant(): void
+    {
+        config(['services.telegram.messenger_base_url' => 'https://t.me']);
+        $publication = Publication::factory()->create([
+            'name' => 'ПокаТренд',
+            'signature_mode' => PublicationSignatureMode::Username,
+        ]);
+        $destination = Destination::factory()->create([
+            'publication_id' => $publication->id,
+            'external_id' => '@PokaTrend',
+        ]);
+
+        $this->assertSame('@PokaTrend', $publication->signatureMarkdown($destination));
+
+        $publication->update([
+            'signature_mode' => PublicationSignatureMode::Link,
+            'signature_label' => 'ПокаТренд',
+        ]);
+        $this->assertSame('[ПокаТренд](https://t.me/PokaTrend)', $publication->fresh()->signatureMarkdown($destination));
+
+        $publication->update(['signature_mode' => PublicationSignatureMode::None]);
+        $this->assertNull($publication->fresh()->signatureMarkdown($destination));
+    }
+
+    public function test_pokatrend_migration_moves_legacy_signature_from_tone_to_link_setting(): void
+    {
+        $legacyInstruction = 'После смысловой концовки оставь пустую строку и добавь отдельной последней строкой строго @PokaTrend — без точки, запятой, эмодзи и любых других знаков после подписи.';
+        $publication = Publication::factory()->create([
+            'slug' => 'pokatrend',
+            'tone_prompt' => "Живой редакционный тон.\n\n{$legacyInstruction}",
+            'signature_mode' => PublicationSignatureMode::None,
+        ]);
+        $destination = Destination::factory()->create([
+            'publication_id' => $publication->id,
+            'external_id' => '@pokatrend',
+        ]);
+        $migration = require database_path('migrations/2026_07_25_115107_set_pokatrend_signature_defaults.php');
+
+        $migration->up();
+
+        $publication->refresh();
+        $this->assertSame('Живой редакционный тон.', $publication->tone_prompt);
+        $this->assertSame(PublicationSignatureMode::Link, $publication->signature_mode);
+        $this->assertSame('ПокаТренд', $publication->signature_label);
+        $this->assertSame('@PokaTrend', $destination->fresh()->external_id);
+    }
+
     public function test_candidate_generation_filters_ads_and_creates_clustered_candidates(): void
     {
         $group = SourceGroup::factory()->create();
@@ -286,6 +387,22 @@ class ContentPlanningTest extends TestCase
             'choices' => [[
                 'message' => [
                     'content' => json_encode(['clusters' => $clusters], JSON_THROW_ON_ERROR),
+                ],
+            ]],
+            'usage' => [],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function rewriteResponse(string $text): array
+    {
+        return [
+            'choices' => [[
+                'message' => [
+                    'content' => json_encode([
+                        'text' => $text,
+                        'risk_flags' => [],
+                    ], JSON_THROW_ON_ERROR),
                 ],
             ]],
             'usage' => [],

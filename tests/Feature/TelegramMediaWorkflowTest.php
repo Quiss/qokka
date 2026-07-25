@@ -20,6 +20,7 @@ use App\Services\MadelineClientFactory;
 use App\Services\MadelineClientPool;
 use App\Services\PlannedPostMediaManager;
 use App\Services\TelegramMessagePayloadFactory;
+use App\Services\TelegramVideoPreparer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
@@ -62,7 +63,7 @@ class TelegramMediaWorkflowTest extends TestCase
                     'mime_type' => 'video/mp4',
                     'size' => 5_000_000,
                     'attributes' => [
-                        ['_' => 'documentAttributeVideo', 'duration' => 12],
+                        ['_' => 'documentAttributeVideo', 'duration' => 12, 'w' => 1080, 'h' => 1920, 'supports_streaming' => true],
                         ['_' => 'documentAttributeFilename', 'file_name' => 'news.mp4'],
                     ],
                     'thumbs' => [
@@ -76,6 +77,10 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame('photo:100', $photoPayload['media'][0]['external_id']);
         $this->assertSame('video', $videoPayload['media'][0]['type']);
         $this->assertSame('m', $videoPayload['media'][0]['metadata']['thumbnail_type']);
+        $this->assertSame(1080, $videoPayload['media'][0]['metadata']['width']);
+        $this->assertSame(1920, $videoPayload['media'][0]['metadata']['height']);
+        $this->assertSame(12, $videoPayload['media'][0]['metadata']['duration']);
+        $this->assertTrue($videoPayload['media'][0]['metadata']['supports_streaming']);
     }
 
     public function test_history_ingestion_stores_media_provenance_and_queues_photo_download(): void
@@ -291,8 +296,9 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool);
-        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool);
+        $videoPreparer = app(TelegramVideoPreparer::class);
+        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool, $videoPreparer);
+        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool, $videoPreparer);
 
         $this->assertNotNull($firstAsset->fresh()->path);
         $this->assertNotNull($secondAsset->fresh()->path);

@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\MediaType;
 use App\Models\MediaAsset;
 use App\Services\MadelineClientPool;
+use App\Services\TelegramVideoPreparer;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -20,7 +21,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 170;
+    public int $timeout = 360;
 
     /** @var list<int> */
     public array $backoff = [60, 300, 900];
@@ -35,7 +36,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         return $this->mediaAssetId.':'.($this->previewOnly ? 'preview' : 'full');
     }
 
-    public function handle(MadelineClientPool $clientPool): void
+    public function handle(MadelineClientPool $clientPool, TelegramVideoPreparer $videoPreparer): void
     {
         $asset = MediaAsset::query()
             ->with('originMediaAsset.sourceMessage.sourceChannel.collectorTelegramAccount', 'sourceMessage.sourceChannel.collectorTelegramAccount')
@@ -54,6 +55,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         }
 
         if (! $this->previewOnly && filled($origin->path)) {
+            $origin = $videoPreparer->prepare($origin);
             $this->syncClones($origin);
 
             return;
@@ -101,6 +103,8 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 'downloaded_at' => now(),
                 'failed_at' => null,
             ]);
+
+            $origin = $videoPreparer->prepare($origin->fresh());
         }
 
         $this->syncClones($origin->fresh());

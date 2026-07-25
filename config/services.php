@@ -47,6 +47,7 @@ return [
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'bot_api_url' => env('TELEGRAM_BOT_API_URL', 'https://api.telegram.org'),
+        'messenger_base_url' => env('MESSENGER_BASE_URL', 'https://t.me'),
         'bot_api_timeout' => (int) env('TELEGRAM_BOT_API_TIMEOUT', 300),
         'bot_api_connect_timeout' => (int) env('TELEGRAM_BOT_API_CONNECT_TIMEOUT', 10),
         'api_id' => env('TELEGRAM_API_ID'),

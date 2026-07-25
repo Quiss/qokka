@@ -7,14 +7,20 @@ use App\DestinationPlatform;
 use App\MediaType;
 use App\Models\Delivery;
 use App\Models\Destination;
+use App\Models\MediaAsset;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 class TelegramPublisher implements Publisher
 {
+    public function __construct(
+        private readonly TelegramMessageFormatter $formatter,
+        private readonly TelegramVideoPreparer $videoPreparer,
+    ) {}
+
     public function validateDestination(Destination $destination): array
     {
         $client = $this->client();
@@ -86,7 +92,11 @@ class TelegramPublisher implements Publisher
             throw new RuntimeException('Выбранное медиа превышает лимит Telegram 50 МБ.');
         }
 
-        $media = $selectedMedia;
+        $media = $selectedMedia
+            ->map(fn (MediaAsset $asset): MediaAsset => $asset->type === MediaType::Video
+                ? $this->videoPreparer->prepare($asset)
+                : $asset)
+            ->values();
         $messageIds = [];
 
         if ($media->isEmpty()) {
@@ -94,18 +104,29 @@ class TelegramPublisher implements Publisher
         }
 
         $captionLimit = (int) $plannedPost->contentPlan->publication->media_caption_limit;
-        $caption = Str::length($text) <= $captionLimit ? $text : '';
+        $caption = $this->formatter->length($text) <= $captionLimit
+            ? $this->formatter->toHtml($text)
+            : '';
 
         if ($media->count() === 1) {
             $asset = $media->first();
             $field = $asset->type === MediaType::Photo ? 'photo' : 'video';
             $method = $asset->type === MediaType::Photo ? 'sendPhoto' : 'sendVideo';
-            $response = $this->client()
-                ->attach($field, Storage::disk($asset->disk)->get($asset->path), basename($asset->path))
-                ->post('/'.$method, array_filter([
-                    'chat_id' => $delivery->destination->external_id,
-                    'caption' => $caption,
-                ], fn ($value): bool => $value !== ''))
+            $request = $this->client()
+                ->attach($field, Storage::disk($asset->disk)->get($asset->path), basename($asset->path));
+            $payload = [
+                'chat_id' => $delivery->destination->external_id,
+                'caption' => $caption,
+                'parse_mode' => $caption !== '' ? 'HTML' : null,
+            ];
+
+            if ($asset->type === MediaType::Video) {
+                $payload = array_merge($payload, $this->videoPayload($asset));
+                $this->attachThumbnail($request, $asset, 'thumbnail', $payload);
+            }
+
+            $response = $request
+                ->post('/'.$method, array_filter($payload, fn (mixed $value): bool => $value !== null && $value !== ''))
                 ->throw();
             $messageIds[] = (string) $response->json('result.message_id');
         } else {
@@ -115,11 +136,19 @@ class TelegramPublisher implements Publisher
             foreach ($media as $index => $asset) {
                 $attachment = 'asset_'.$index;
                 $request->attach($attachment, Storage::disk($asset->disk)->get($asset->path), basename($asset->path));
-                $payload[] = array_filter([
+                $item = [
                     'type' => $asset->type === MediaType::Photo ? 'photo' : 'video',
                     'media' => 'attach://'.$attachment,
                     'caption' => $index === 0 ? $caption : '',
-                ], fn ($value): bool => $value !== '');
+                    'parse_mode' => $index === 0 && $caption !== '' ? 'HTML' : null,
+                ];
+
+                if ($asset->type === MediaType::Video) {
+                    $item = array_merge($item, $this->videoPayload($asset));
+                    $this->attachThumbnail($request, $asset, 'thumbnail_'.$index, $item);
+                }
+
+                $payload[] = array_filter($item, fn (mixed $value): bool => $value !== null && $value !== '');
             }
 
             $response = $request->post('/sendMediaGroup', [
@@ -166,28 +195,69 @@ class TelegramPublisher implements Publisher
     {
         $ids = [];
 
-        foreach ($this->splitText($text) as $chunk) {
-            $response = $this->client()->post('/sendMessage', ['chat_id' => $chatId, 'text' => $chunk])->throw();
+        foreach ($this->formatter->chunks($text) as $chunk) {
+            $response = $this->client()->post('/sendMessage', [
+                'chat_id' => $chatId,
+                'text' => $chunk,
+                'parse_mode' => 'HTML',
+            ])->throw();
             $ids[] = (string) $response->json('result.message_id');
+        }
+
+        if ($ids === []) {
+            throw new RuntimeException('A planned post cannot be published without text or media.');
         }
 
         return $ids;
     }
 
-    /** @return list<string> */
-    private function splitText(string $text): array
+    /** @return array<string, int|bool> */
+    private function videoPayload(MediaAsset $asset): array
     {
-        if ($text === '') {
-            throw new RuntimeException('A planned post cannot be published without text or media.');
+        $metadata = is_array($asset->metadata) ? $asset->metadata : [];
+        $payload = [];
+
+        foreach (['width', 'height', 'duration'] as $key) {
+            if (is_numeric($metadata[$key] ?? null) && (int) $metadata[$key] > 0) {
+                $payload[$key] = (int) $metadata[$key];
+            }
         }
 
-        $chunks = [];
-
-        while ($text !== '') {
-            $chunks[] = mb_substr($text, 0, 4096);
-            $text = mb_substr($text, 4096);
+        if (($metadata['supports_streaming'] ?? false) === true) {
+            $payload['supports_streaming'] = true;
         }
 
-        return $chunks;
+        return $payload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function attachThumbnail(
+        PendingRequest $request,
+        MediaAsset $asset,
+        string $attachment,
+        array &$payload,
+    ): void {
+        $disk = $asset->preview_disk ?: $asset->disk;
+
+        if (blank($asset->preview_path) || ! Storage::disk($disk)->exists($asset->preview_path)) {
+            return;
+        }
+
+        try {
+            if (Storage::disk($disk)->size($asset->preview_path) > 200 * 1024) {
+                return;
+            }
+
+            $request->attach(
+                $attachment,
+                Storage::disk($disk)->get($asset->preview_path),
+                basename($asset->preview_path),
+            );
+            $payload['thumbnail'] = 'attach://'.$attachment;
+        } catch (Throwable) {
+            return;
+        }
     }
 }

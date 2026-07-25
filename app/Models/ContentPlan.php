@@ -21,6 +21,8 @@ use Illuminate\Support\Carbon;
  * @property int $candidate_target
  * @property Carbon|null $generated_at
  * @property Carbon|null $ai_reviewed_at
+ * @property int $story_candidates_count
+ * @property int $planned_posts_count
  * @property-read Publication $publication
  * @property-read Collection<int, StoryCandidate> $storyCandidates
  * @property-read Collection<int, PlannedPost> $plannedPosts

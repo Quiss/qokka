@@ -244,7 +244,7 @@ return [
                 'maxProcesses' => 3,
                 'memory' => 256,
                 'tries' => 1,
-                'timeout' => 120,
+                'timeout' => 360,
             ],
             'supervisor-telegram' => [
                 'connection' => 'redis',
@@ -253,7 +253,7 @@ return [
                 'maxProcesses' => 1,
                 'memory' => 512,
                 'tries' => 3,
-                'timeout' => 180,
+                'timeout' => 360,
             ],
         ],
 

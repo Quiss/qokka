@@ -13,6 +13,7 @@ use App\PlannedPostStatus;
 use App\Services\PlannedPostMediaManager;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\ViewField;
@@ -58,6 +59,7 @@ class PlannedPostsTable
                             ->wrap(),
                         TextColumn::make('text')
                             ->label('Готовый текст')
+                            ->markdown()
                             ->limit(180)
                             ->wrap()
                             ->color('gray')
@@ -111,9 +113,12 @@ class PlannedPostsTable
                             ->all(),
                     ])
                     ->schema([
-                        Textarea::make('text')
+                        MarkdownEditor::make('text')
                             ->label('Текст публикации')
-                            ->rows(12)
+                            ->toolbarButtons([
+                                ['bold', 'italic', 'strike', 'link'],
+                                ['undo', 'redo'],
+                            ])
                             ->required()
                             ->disabled(fn (PlannedPost $record): bool => self::isImmutable($record))
                             ->columnSpanFull(),

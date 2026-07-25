@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Publications\Schemas;
 
 use App\DestinationPlatform;
+use App\PublicationSignatureMode;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
@@ -13,6 +14,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Str;
@@ -151,9 +153,51 @@ class PublicationForm
                             ->required()
                             ->numeric()
                             ->default(900),
-                        Toggle::make('show_source_attribution')
-                            ->label('Показывать ссылку на источник')
-                            ->default(false),
+                        Select::make('signature_mode')
+                            ->label('Подпись поста')
+                            ->options(collect(PublicationSignatureMode::cases())
+                                ->mapWithKeys(fn (PublicationSignatureMode $mode): array => [$mode->value => $mode->label()])
+                                ->all())
+                            ->default(PublicationSignatureMode::None->value)
+                            ->live()
+                            ->required(),
+                        TextInput::make('signature_label')
+                            ->label('Текст ссылки')
+                            ->placeholder('ПокаТренд')
+                            ->visible(fn (Get $get): bool => $get('signature_mode') === PublicationSignatureMode::Link->value)
+                            ->required(fn (Get $get): bool => $get('signature_mode') === PublicationSignatureMode::Link->value),
+                        Placeholder::make('signature_preview')
+                            ->label('Подпись, которую должен вернуть ИИ')
+                            ->content(function (Get $get): string {
+                                $mode = PublicationSignatureMode::tryFrom((string) $get('signature_mode'))
+                                    ?? PublicationSignatureMode::None;
+
+                                if ($mode === PublicationSignatureMode::None) {
+                                    return 'Без подписи';
+                                }
+
+                                $destinations = $get('destinations');
+                                $firstDestination = is_array($destinations) ? reset($destinations) : null;
+                                $username = is_array($firstDestination)
+                                    ? (string) ($firstDestination['external_id'] ?? '')
+                                    : '';
+
+                                if (! Str::startsWith($username, '@')) {
+                                    return 'Для подписи нужен публичный @username канала.';
+                                }
+
+                                if ($mode === PublicationSignatureMode::Username) {
+                                    return $username;
+                                }
+
+                                $label = filled($get('signature_label'))
+                                    ? (string) $get('signature_label')
+                                    : (string) $get('name');
+                                $baseUrl = rtrim((string) config('services.telegram.messenger_base_url'), '/');
+
+                                return "[{$label}]({$baseUrl}/".ltrim($username, '@').')';
+                            })
+                            ->columnSpanFull(),
                     ]),
             ]);
     }

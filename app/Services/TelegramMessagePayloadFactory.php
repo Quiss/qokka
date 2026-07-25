@@ -106,6 +106,7 @@ class TelegramMessagePayloadFactory
         $documentAttributes = is_array($document['attributes'] ?? null) ? $document['attributes'] : [];
         $attributes = collect($documentAttributes)->filter(fn (mixed $attribute): bool => is_array($attribute));
         $isVideo = $attributes->contains(fn (array $attribute): bool => ($attribute['_'] ?? null) === 'documentAttributeVideo');
+        $videoAttribute = $attributes->first(fn (array $attribute): bool => ($attribute['_'] ?? null) === 'documentAttributeVideo');
         $isAnimation = $attributes->contains(fn (array $attribute): bool => ($attribute['_'] ?? null) === 'documentAttributeAnimated');
         $isPhoto = str_starts_with((string) ($document['mime_type'] ?? ''), 'image/');
         $fileNameAttribute = $attributes
@@ -126,6 +127,10 @@ class TelegramMessagePayloadFactory
                 'telegram_media_type' => 'document',
                 'file_name' => $fileName,
                 'thumbnail_type' => is_array($thumbnail) ? $thumbnail['type'] : null,
+                'width' => is_array($videoAttribute) ? ($videoAttribute['w'] ?? $videoAttribute['width'] ?? null) : null,
+                'height' => is_array($videoAttribute) ? ($videoAttribute['h'] ?? $videoAttribute['height'] ?? null) : null,
+                'duration' => is_array($videoAttribute) ? ($videoAttribute['duration'] ?? null) : null,
+                'supports_streaming' => is_array($videoAttribute) ? ($videoAttribute['supports_streaming'] ?? null) : null,
             ], fn (mixed $value): bool => $value !== null),
         ]];
     }

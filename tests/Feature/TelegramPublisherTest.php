@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\Delivery;
 use App\Models\Destination;
+use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
 use App\Models\StoryCandidate;
@@ -13,6 +15,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use ReflectionMethod;
 use ReflectionProperty;
 use RuntimeException;
@@ -41,7 +45,7 @@ class TelegramPublisherTest extends TestCase
         $post = PlannedPost::factory()->create([
             'content_plan_id' => $plan->id,
             'story_candidate_id' => $candidate->id,
-            'text' => 'Готовый пост',
+            'text' => '**Готовый** пост',
         ]);
         $delivery = Delivery::factory()->create(['planned_post_id' => $post->id, 'destination_id' => $destination->id]);
 
@@ -50,7 +54,68 @@ class TelegramPublisherTest extends TestCase
         $this->assertSame(['321'], $result['message_ids']);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://tgprx.orangepanda.ru/bottest-token/sendMessage'
             && $request['chat_id'] === '@poka_trend'
-            && $request['text'] === 'Готовый пост');
+            && $request['text'] === '<b>Готовый</b> пост'
+            && $request['parse_mode'] === 'HTML');
+    }
+
+    public function test_video_is_sent_with_dimensions_streaming_metadata_and_preview(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/video.mp4', 'original-video');
+        Storage::disk('local')->put('telegram/preview.jpg', 'preview');
+        Process::fake(fn (): mixed => Process::result(json_encode([
+            'streams' => [[
+                'codec_type' => 'video',
+                'codec_name' => 'h264',
+                'width' => 1080,
+                'height' => 1920,
+                'duration' => '15',
+            ]],
+            'format' => ['format_name' => 'mp4', 'duration' => '15'],
+        ], JSON_THROW_ON_ERROR)));
+        config([
+            'services.telegram.bot_token' => 'test-token',
+            'services.telegram.bot_api_url' => 'https://tgprx.orangepanda.ru/',
+        ]);
+        Http::fake([
+            'https://tgprx.orangepanda.ru/bottest-token/sendVideo' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 654],
+            ]),
+        ]);
+        $publication = Publication::factory()->create();
+        $destination = Destination::factory()->create(['publication_id' => $publication->id, 'external_id' => '@poka_trend']);
+        $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+            'text' => '**Видео дня**',
+        ]);
+        MediaAsset::factory()->for($post, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => 'telegram/video.mp4',
+            'preview_disk' => 'local',
+            'preview_path' => 'telegram/preview.jpg',
+            'preview_mime_type' => 'image/jpeg',
+            'mime_type' => 'video/mp4',
+        ]);
+        $delivery = Delivery::factory()->create(['planned_post_id' => $post->id, 'destination_id' => $destination->id]);
+
+        $result = app(TelegramPublisher::class)->publish($delivery);
+
+        $this->assertSame(['654'], $result['message_ids']);
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://tgprx.orangepanda.ru/bottest-token/sendVideo'
+            && $this->multipartValue($request, 'chat_id') === '@poka_trend'
+            && $this->multipartValue($request, 'caption') === '<b>Видео дня</b>'
+            && $this->multipartValue($request, 'parse_mode') === 'HTML'
+            && (int) $this->multipartValue($request, 'width') === 1080
+            && (int) $this->multipartValue($request, 'height') === 1920
+            && (int) $this->multipartValue($request, 'duration') === 15
+            && (bool) $this->multipartValue($request, 'supports_streaming')
+            && $this->multipartValue($request, 'thumbnail') === 'attach://thumbnail'
+            && $request->hasFile('video', 'original-video', 'video.mp4')
+            && $request->hasFile('thumbnail', 'preview', 'preview.jpg'));
     }
 
     public function test_telegram_client_uses_configured_publish_timeouts(): void
@@ -118,5 +183,10 @@ class TelegramPublisherTest extends TestCase
         $this->expectExceptionMessage('должен быть администратором');
 
         app(TelegramPublisher::class)->validateDestination($destination);
+    }
+
+    private function multipartValue(Request $request, string $name): mixed
+    {
+        return collect($request->data())->firstWhere('name', $name)['contents'] ?? null;
     }
 }

@@ -5,6 +5,7 @@ namespace App\Filament\Resources\PlannedPosts\Schemas;
 use App\Models\PlannedPost;
 use App\PlannedPostStatus;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
@@ -18,13 +19,17 @@ class PlannedPostForm
             ->components([
                 Placeholder::make('story')
                     ->content(fn (?PlannedPost $record): string => $record === null ? '—' : $record->storyCandidate->title),
-                Textarea::make('text')
+                MarkdownEditor::make('text')
                     ->required()
-                    ->rows(12)
+                    ->toolbarButtons([
+                        ['bold', 'italic', 'strike', 'link'],
+                        ['undo', 'redo'],
+                    ])
                     ->columnSpanFull(),
-                Textarea::make('original_ai_text')
+                MarkdownEditor::make('original_ai_text')
                     ->disabled()
                     ->dehydrated(false)
+                    ->toolbarButtons([])
                     ->columnSpanFull(),
                 DateTimePicker::make('scheduled_at')
                     ->label('Время публикации')
