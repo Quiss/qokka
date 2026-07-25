@@ -117,6 +117,7 @@ class PlannedPostsTable
                             ->label('Текст публикации')
                             ->toolbarButtons([
                                 ['bold', 'italic', 'strike', 'link'],
+                                ['blockquote'],
                                 ['undo', 'redo'],
                             ])
                             ->required()

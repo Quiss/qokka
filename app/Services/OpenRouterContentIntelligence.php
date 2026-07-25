@@ -11,6 +11,7 @@ use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\SourcePost;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -99,6 +100,20 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $candidate = $plannedPost->storyCandidate;
         $publication = $plannedPost->contentPlan->publication;
         $signature = $publication->signatureMarkdown($publication->destination);
+        $recentPosts = PlannedPost::query()
+            ->where('id', '<>', $plannedPost->id)
+            ->whereNotNull('text')
+            ->whereHas(
+                'contentPlan',
+                fn (Builder $query): Builder => $query->where('publication_id', $publication->id),
+            )
+            ->latest('id')
+            ->limit(5)
+            ->pluck('text')
+            ->filter(fn (?string $text): bool => filled($text))
+            ->map(fn (string $text): string => Str::limit($text, 600))
+            ->values()
+            ->all();
         $sources = $candidate->sourcePosts->map(fn ($post): array => [
             'source_post_id' => $post->id,
             'channel' => $post->sourceChannel->title,
@@ -109,13 +124,14 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'type' => 'text',
             'text' => 'Перепиши инфоповод в готовый самостоятельный Telegram-пост. Не указывай источники и не добавляй неподтвержденные факты. '
                 .'Используй только согласованные или однозначно подтвержденные сведения. Противоречивые детали не включай в текст и добавь риск source_conflict. '
-                .'Разрешена обычная разметка Markdown: **жирный**, *курсив*, ~~зачеркнутый~~ и [текст](https://example.com). Другие конструкции Markdown не используй. '
-                .'Пиши живо и естественно: 2–4 коротких абзаца, разнообразная структура, один уместный жирный акцент, от 0 до 2 уместных эмодзи. '
-                .'Допустима одна короткая эмоциональная фраза, если она подходит новости; для серьезных тем исключи юмор и легкомысленные эмодзи. '
-                .'Не повторяй один и тот же шаблон заголовка, вводную фразу или финал между постами. '
-                .(filled($instruction) ? 'Дополнительная инструкция редактора: '.$instruction.'. ' : '')
-                ."Язык: {$publication->language}. Тон: {$publication->tone_prompt}. Примеры желаемого тона (это ориентиры, не шаблоны): "
+                .'Разрешена обычная разметка Markdown: **жирный**, *курсив*, ~~зачеркнутый~~, [текст](https://example.com) и отдельная цитата в формате > текст. Другие конструкции Markdown не используй. '
+                .'Цитируй только слова, которые дословно присутствуют в материалах; не придумывай цитаты и не превращай пересказ в прямую речь. '
+                .(filled($instruction) ? 'Разовая дополнительная инструкция редактора для этого рерайта: '.$instruction.'. При конфликте стилевых требований она имеет приоритет над постоянной инструкцией канала. ' : '')
+                ."Язык: {$publication->language}. Редакционная инструкция канала — единственный источник постоянных требований к тону, объему, структуре, началу и финалу, заголовкам, акцентам, цитатам, эмодзи и юмору: {$publication->tone_prompt}. "
+                .'Если редакционная инструкция не регулирует отдельный стилевой параметр, выбери его по смыслу конкретной новости. Примеры желаемого текста (это ориентиры, не шаблоны и не источники фактов): '
                 .json_encode($publication->tone_examples ?? [], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
+                .'. Недавние тексты этой же публикации используй только для выполнения требований редакционной инструкции о разнообразии и повторяемости; это не шаблоны и не источники фактов: '
+                .json_encode($recentPosts, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
                 .'. '.$this->signatureInstruction($signature).' Это правило подписи имеет приоритет над тоном, примерами и дополнительной инструкцией редактора. Запрещенные фразы: '
                 .json_encode($publication->forbidden_phrases ?? [], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)
                 .'. Заголовок и материалы: '.json_encode([
@@ -135,9 +151,9 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $plannedPost,
             AiOperation::Rewrite,
             $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
-            [$this->systemMessage('Ты сильный редактор Telegram-канала. Сохраняй факты и смысл, избегай кликбейта, канцелярита и однообразных шаблонов.'), ['role' => 'user', 'content' => $content]],
+            [$this->systemMessage('Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.'), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
-            'v2',
+            'v4',
         ));
 
         if ($this->hasExpectedSignature($result['text'], $signature)) {
@@ -153,7 +169,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
             ],
             $this->rewriteSchema(),
-            'v2',
+            'v4',
         ));
 
         if (! $this->hasExpectedSignature($corrected['text'], $signature)) {

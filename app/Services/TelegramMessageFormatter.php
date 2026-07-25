@@ -132,6 +132,7 @@ class TelegramMessageFormatter
             'del', 's' => '<s>'.$contents.'</s>',
             'a' => $this->renderLink($node, $contents),
             'br' => "\n",
+            'blockquote' => '<blockquote>'.trim($contents)."</blockquote>\n\n",
             'p', 'div', 'section', 'article', 'li' => $contents."\n\n",
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6' => '<b>'.$contents."</b>\n\n",
             default => $contents,

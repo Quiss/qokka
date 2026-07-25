@@ -155,7 +155,7 @@ class ContentPlanningTest extends TestCase
         ));
     }
 
-    public function test_rewrite_uses_markdown_tone_rules_and_retries_an_invalid_signature_once(): void
+    public function test_rewrite_uses_channel_editorial_instruction_and_retries_an_invalid_signature_once(): void
     {
         Http::preventStrayRequests();
         config([
@@ -166,6 +166,7 @@ class ContentPlanningTest extends TestCase
         $publication = Publication::factory()->create([
             'signature_mode' => PublicationSignatureMode::Link,
             'signature_label' => 'ПокаТренд',
+            'tone_prompt' => 'Пиши ровно одним абзацем, без эмодзи и закончи самым сильным фактом.',
             'tone_examples' => ['Коротко и живо'],
         ]);
         Destination::factory()->create([
@@ -174,8 +175,18 @@ class ContentPlanningTest extends TestCase
         ]);
         $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
         $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $previousPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => $plan->plan_date->subDay(),
+        ]);
+        $previousCandidate = StoryCandidate::factory()->create(['content_plan_id' => $previousPlan->id]);
+        PlannedPost::factory()->create([
+            'content_plan_id' => $previousPlan->id,
+            'story_candidate_id' => $previousCandidate->id,
+            'text' => 'Недавний пост с повторяющейся структурой.',
+        ]);
         $sourcePost = SourcePost::factory()->create([
-            'text' => 'Компания представила новый продукт.',
+            'text' => 'Глава компании сказал: «Мы представили новый продукт».',
         ]);
         $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
         $plannedPost = PlannedPost::factory()->create([
@@ -195,14 +206,19 @@ class ContentPlanningTest extends TestCase
             $result['text'],
         );
         Http::assertSentCount(2);
-        Http::assertSent(fn (Request $request): bool => str_contains(
-            (string) data_get($request->data(), 'messages.1.content.0.text'),
-            'Разрешена обычная разметка Markdown',
-        ) && str_contains(
-            (string) data_get($request->data(), 'messages.1.content.0.text'),
-            '[ПокаТренд](https://t.me/PokaTrend)',
-        ));
-        $this->assertSame(['v2', 'v2'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+        Http::assertSent(function (Request $request): bool {
+            $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
+
+            return str_contains($prompt, 'Разрешена обычная разметка Markdown')
+                && str_contains($prompt, 'отдельная цитата в формате > текст')
+                && str_contains($prompt, 'единственный источник постоянных требований к тону')
+                && str_contains($prompt, 'Пиши ровно одним абзацем, без эмодзи и закончи самым сильным фактом.')
+                && str_contains($prompt, 'Недавний пост с повторяющейся структурой.')
+                && str_contains($prompt, '[ПокаТренд](https://t.me/PokaTrend)')
+                && ! str_contains($prompt, 'легкий инфоповод может занять 1–2 коротких абзаца')
+                && ! str_contains($prompt, 'используй от 0 до 2 жирных акцентов');
+        });
+        $this->assertSame(['v4', 'v4'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
     }
 
     public function test_publication_builds_each_configured_signature_variant(): void
@@ -250,6 +266,40 @@ class ContentPlanningTest extends TestCase
         $this->assertSame(PublicationSignatureMode::Link, $publication->signature_mode);
         $this->assertSame('ПокаТренд', $publication->signature_label);
         $this->assertSame('@PokaTrend', $destination->fresh()->external_id);
+    }
+
+    public function test_pokatrend_editorial_instruction_migration_only_replaces_the_known_legacy_prompt(): void
+    {
+        $legacyPrompt = $this->legacyPokaTrendEditorialInstruction();
+        $publication = Publication::factory()->create([
+            'slug' => 'pokatrend',
+            'tone_prompt' => $legacyPrompt,
+        ]);
+        $customPublication = Publication::factory()->create([
+            'tone_prompt' => 'Моя вручную настроенная редакционная инструкция.',
+        ]);
+        $migration = require database_path('migrations/2026_07_25_162149_update_pokatrend_editorial_instructions.php');
+
+        $migration->up();
+
+        $updatedPrompt = $publication->fresh()->tone_prompt;
+        $this->assertStringContainsString('Выбирай форму под сам инфоповод, а не под единый шаблон.', $updatedPrompt);
+        $this->assertStringContainsString('Цитаты оформляй отдельным Markdown-блоком через `>`', $updatedPrompt);
+        $this->assertStringContainsString('Отдельный вывод не обязателен.', $updatedPrompt);
+        $this->assertStringNotContainsString('обычно 350–700 знаков', $updatedPrompt);
+        $this->assertSame(
+            'Моя вручную настроенная редакционная инструкция.',
+            $customPublication->fresh()->tone_prompt,
+        );
+
+        $migration->down();
+
+        $this->assertSame($legacyPrompt, $publication->fresh()->tone_prompt);
+
+        $publication->update(['tone_prompt' => 'Настройка PokaTrend, изменённая вручную.']);
+        $migration->up();
+
+        $this->assertSame('Настройка PokaTrend, изменённая вручную.', $publication->fresh()->tone_prompt);
     }
 
     public function test_candidate_generation_filters_ads_and_creates_clustered_candidates(): void
@@ -407,5 +457,26 @@ class ContentPlanningTest extends TestCase
             ]],
             'usage' => [],
         ];
+    }
+
+    private function legacyPokaTrendEditorialInstruction(): string
+    {
+        return <<<'PROMPT'
+Пиши как редактор живого Telegram-канала о трендах, технологиях, брендах и необычных событиях.
+
+Главный принцип: конкретный факт → понятное объяснение → одна точная реакция. Интерес должен появляться из деталей новости, а не из повторяющихся мемных выражений.
+
+Начинай сразу с самого интересного факта. Не дублируй одну мысль в заголовке и первом абзаце. Используй 2–4 коротких абзаца, обычно 350–700 знаков. Сохраняй важные имена, названия, цены, цифры и обстоятельства.
+
+Тон разговорный, современный и уверенный. Можно добавить лёгкую иронию, неожиданное сравнение или короткий панч в конце. Не больше одной шутки на пост. Шутка должна быть связана с конкретной новостью, а не состоять из универсального сленга.
+
+Меняй структуру и ритм постов: не начинай и не заканчивай публикации одинаково. Не используй постоянные фирменные обороты внутри каждого текста.
+
+Для странных товаров, маркетинга и поп-культуры допустим более ироничный тон. Для экономики и технологий — простой и информативный, с понятной аналогией. Для аварий, конфликтов и серьёзных происшествий — сдержанный, без шуток и обесценивания.
+
+Используй не больше одного тематического эмодзи. Не выдумывай реакции людей, мотивы компаний или дополнительные факты. Не преувеличивай значение события и не используй кликбейт.
+
+Завершай пост коротким осмысленным выводом, наблюдением или точной шуткой, связанной именно с этой новостью. Для серьёзных тем используй спокойный вывод без юмора. Не заканчивай текст пустой универсальной реакцией. Если уместного вывода нет, закончи на самом сильном конкретном факте.
+PROMPT;
     }
 }

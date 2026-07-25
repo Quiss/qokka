@@ -23,6 +23,7 @@ class PlannedPostForm
                     ->required()
                     ->toolbarButtons([
                         ['bold', 'italic', 'strike', 'link'],
+                        ['blockquote'],
                         ['undo', 'redo'],
                     ])
                     ->columnSpanFull(),

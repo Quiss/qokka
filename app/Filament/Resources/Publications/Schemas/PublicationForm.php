@@ -48,9 +48,11 @@ class PublicationForm
                             ->label('Канал активен')
                             ->default(true),
                         Textarea::make('tone_prompt')
-                            ->label('Тон для рерайта')
-                            ->helperText('Опишите стиль, лексику, длину и то, чего нужно избегать.')
-                            ->rows(5)
+                            ->label('Редакционная инструкция для AI')
+                            ->helperText('Главная настройка стиля этого канала. Здесь задаются тон, объём, число абзацев, ритм, начало и финал, цитаты, жирные акценты, эмодзи, юмор и правила для разных тем. Приложение отдельно контролирует только достоверность, безопасный Markdown и подпись.')
+                            ->rows(12)
+                            ->autosize()
+                            ->trim()
                             ->required()
                             ->columnSpanFull(),
                         Placeholder::make('publisher_bot')
@@ -136,7 +138,8 @@ class PublicationForm
                             ->required()
                             ->default('Europe/Moscow'),
                         TagsInput::make('tone_examples')
-                            ->label('Примеры формулировок')
+                            ->label('Примеры желаемого текста')
+                            ->helperText('AI использует их как ориентиры стиля и структуры, но не как шаблоны или источники фактов.')
                             ->columnSpanFull(),
                         TagsInput::make('forbidden_phrases')
                             ->label('Запрещённые фразы')

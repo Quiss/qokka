@@ -33,6 +33,20 @@ class TelegramMessageFormatterTest extends TestCase
         $this->assertStringContainsString('сырой HTML', $html);
     }
 
+    public function test_it_converts_markdown_quotes_to_telegram_blockquotes(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml(
+            "> Первая строка цитаты.\n>\n> Вторая строка с **акцентом**.\n\nОбычный абзац.",
+        );
+
+        $this->assertSame(
+            "<blockquote>Первая строка цитаты.\n\nВторая строка с <b>акцентом</b>.</blockquote>\n\nОбычный абзац.",
+            $html,
+        );
+    }
+
     public function test_it_splits_long_messages_by_telegram_text_length(): void
     {
         $formatter = new TelegramMessageFormatter;
