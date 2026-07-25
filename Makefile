@@ -141,7 +141,7 @@ restart-app:
 
 # Restart Horizon (graceful)
 restart-horizon:
-	$(PRODUCTION_COMPOSE) exec app php artisan horizon:terminate
+	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:terminate
 	@echo "Horizon will restart automatically"
 
 # Restart Scheduler (with lock cleanup)
