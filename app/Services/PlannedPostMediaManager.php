@@ -107,6 +107,35 @@ class PlannedPostMediaManager
             ->exists();
     }
 
+    public function syncAvailableOrigins(PlannedPost $plannedPost): void
+    {
+        $plannedPost->mediaAssets()
+            ->whereNull('path')
+            ->with('originMediaAsset')
+            ->get()
+            ->each(function (MediaAsset $selectedAsset): void {
+                $origin = $selectedAsset->originMediaAsset;
+
+                if ($origin === null || blank($origin->path)) {
+                    return;
+                }
+
+                $selectedAsset->update([
+                    'disk' => $origin->disk,
+                    'path' => $origin->path,
+                    'preview_disk' => $origin->preview_disk,
+                    'preview_path' => $origin->preview_path,
+                    'preview_mime_type' => $origin->preview_mime_type,
+                    'checksum' => $origin->checksum,
+                    'downloaded_at' => $origin->downloaded_at,
+                    'preview_downloaded_at' => $origin->preview_downloaded_at,
+                    'failed_at' => $origin->failed_at,
+                    'preview_failed_at' => $origin->preview_failed_at,
+                    'metadata' => $origin->metadata,
+                ]);
+            });
+    }
+
     /** @return Collection<int, MediaAsset> */
     public function availableAssets(PlannedPost $plannedPost): Collection
     {

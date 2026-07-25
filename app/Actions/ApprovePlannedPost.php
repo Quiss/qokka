@@ -25,6 +25,7 @@ class ApprovePlannedPost
     {
         $plannedPost->loadMissing('contentPlan.publication.destination', 'contentPlan.plannedPosts');
         $riskFlags = array_values(array_filter($plannedPost->risk_flags ?? []));
+        $this->mediaManager->syncAvailableOrigins($plannedPost);
 
         if ($this->mediaManager->hasUnpreparedSelection($plannedPost)) {
             throw ValidationException::withMessages([

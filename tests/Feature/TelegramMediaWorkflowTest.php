@@ -20,7 +20,6 @@ use App\Services\MadelineClientFactory;
 use App\Services\MadelineClientPool;
 use App\Services\PlannedPostMediaManager;
 use App\Services\TelegramMessagePayloadFactory;
-use App\Services\TelegramVideoPreparer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
@@ -296,13 +295,75 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        $videoPreparer = app(TelegramVideoPreparer::class);
-        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool, $videoPreparer);
-        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool, $videoPreparer);
+        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool);
+        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool);
 
         $this->assertNotNull($firstAsset->fresh()->path);
         $this->assertNotNull($secondAsset->fresh()->path);
         Storage::disk('local')->assertExists($firstAsset->fresh()->path);
         Storage::disk('local')->assertExists($secondAsset->fresh()->path);
+    }
+
+    public function test_existing_video_file_is_synced_to_planned_post_without_additional_processing(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/video.mp4', 'original-video');
+        $sourcePost = SourcePost::factory()->create();
+        $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => 'telegram/video.mp4',
+            'mime_type' => 'video/mp4',
+        ]);
+        $plannedPost = PlannedPost::factory()->create();
+        $selectedAsset = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'origin_media_asset_id' => $sourceAsset->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+
+        (new DownloadMediaAssetJob($selectedAsset->id))->handle(app(MadelineClientPool::class));
+
+        $selectedAsset->refresh();
+        $this->assertSame('telegram/video.mp4', $selectedAsset->path);
+        $this->assertNotNull($selectedAsset->downloaded_at);
+        Storage::disk('local')->assertExists($selectedAsset->path);
+    }
+
+    public function test_approval_recovers_a_selected_video_path_from_its_downloaded_origin(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/video.mp4', 'original-video');
+        $user = User::factory()->create();
+        $plan = ContentPlan::factory()->create([
+            'slot_schedule' => [now()->addHour()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create();
+        $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => 'telegram/video.mp4',
+            'mime_type' => 'video/mp4',
+        ]);
+        $plannedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+            'scheduled_at' => now()->addHour(),
+            'status' => PlannedPostStatus::FinalReview,
+            'risk_flags' => [],
+        ]);
+        $selectedAsset = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'origin_media_asset_id' => $sourceAsset->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+
+        app(ApprovePlannedPost::class)->approve($plannedPost, $user);
+
+        $this->assertSame(PlannedPostStatus::Approved, $plannedPost->fresh()->status);
+        $this->assertSame('telegram/video.mp4', $selectedAsset->fresh()->path);
     }
 }

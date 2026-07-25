@@ -16,10 +16,7 @@ use Throwable;
 
 class TelegramPublisher implements Publisher
 {
-    public function __construct(
-        private readonly TelegramMessageFormatter $formatter,
-        private readonly TelegramVideoPreparer $videoPreparer,
-    ) {}
+    public function __construct(private readonly TelegramMessageFormatter $formatter) {}
 
     public function validateDestination(Destination $destination): array
     {
@@ -92,11 +89,7 @@ class TelegramPublisher implements Publisher
             throw new RuntimeException('Выбранное медиа превышает лимит Telegram 50 МБ.');
         }
 
-        $media = $selectedMedia
-            ->map(fn (MediaAsset $asset): MediaAsset => $asset->type === MediaType::Video
-                ? $this->videoPreparer->prepare($asset)
-                : $asset)
-            ->values();
+        $media = $selectedMedia;
         $messageIds = [];
 
         if ($media->isEmpty()) {

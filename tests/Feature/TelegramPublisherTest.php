@@ -15,7 +15,6 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use ReflectionMethod;
 use ReflectionProperty;
@@ -63,16 +62,6 @@ class TelegramPublisherTest extends TestCase
         Storage::fake('local');
         Storage::disk('local')->put('telegram/video.mp4', 'original-video');
         Storage::disk('local')->put('telegram/preview.jpg', 'preview');
-        Process::fake(fn (): mixed => Process::result(json_encode([
-            'streams' => [[
-                'codec_type' => 'video',
-                'codec_name' => 'h264',
-                'width' => 1080,
-                'height' => 1920,
-                'duration' => '15',
-            ]],
-            'format' => ['format_name' => 'mp4', 'duration' => '15'],
-        ], JSON_THROW_ON_ERROR)));
         config([
             'services.telegram.bot_token' => 'test-token',
             'services.telegram.bot_api_url' => 'https://tgprx.orangepanda.ru/',
@@ -99,6 +88,12 @@ class TelegramPublisherTest extends TestCase
             'preview_path' => 'telegram/preview.jpg',
             'preview_mime_type' => 'image/jpeg',
             'mime_type' => 'video/mp4',
+            'metadata' => [
+                'width' => 1080,
+                'height' => 1920,
+                'duration' => 15,
+                'supports_streaming' => true,
+            ],
         ]);
         $delivery = Delivery::factory()->create(['planned_post_id' => $post->id, 'destination_id' => $destination->id]);
 
