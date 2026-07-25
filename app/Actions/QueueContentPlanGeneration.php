@@ -18,7 +18,7 @@ class QueueContentPlanGeneration
                 return false;
             }
 
-            if ($lockedPlan->storyCandidates()->where('status', '!=', 'pending')->exists()) {
+            if ($lockedPlan->plannedPosts()->exists()) {
                 return false;
             }
 

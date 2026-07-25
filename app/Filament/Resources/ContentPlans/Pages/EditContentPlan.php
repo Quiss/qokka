@@ -45,13 +45,13 @@ class EditContentPlan extends EditRecord
                 ->icon('heroicon-m-arrow-path')
                 ->color('warning')
                 ->requiresConfirmation()
-                ->modalDescription('Текущие кандидаты, по которым ещё не принято решение, будут заменены новой подборкой с повторной проверкой кластеров.')
+                ->modalDescription('Одобренные и отклонённые кандидаты сохранятся. Кандидаты без решения будут заменены новой подборкой, а уже рассмотренные источники не вернутся.')
                 ->visible(fn (): bool => $this->contentPlan()->status === ContentPlanStatus::CandidateReview
-                    && ! $this->contentPlan()->storyCandidates()->where('status', '!=', 'pending')->exists())
+                    && $this->contentPlan()->plannedPosts()->doesntExist())
                 ->action(function (QueueContentPlanGeneration $queue): void {
                     $queued = $queue->handle($this->contentPlan());
                     Notification::make()
-                        ->title($queued ? 'Повторная сборка поставлена в очередь' : 'Подборку нельзя пересобрать после начала модерации')
+                        ->title($queued ? 'Повторная сборка поставлена в очередь' : 'Подборка уже собирается или план уже запущен')
                         ->status($queued ? 'success' : 'warning')
                         ->send();
                 }),

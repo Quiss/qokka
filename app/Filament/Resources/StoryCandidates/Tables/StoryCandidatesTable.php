@@ -34,6 +34,17 @@ class StoryCandidatesTable
                 'sourcePosts.sourceChannel',
                 'sourcePosts.mediaAssets',
             ]))
+            ->defaultSort(function (Builder $query): Builder {
+                return $query
+                    ->orderByRaw(
+                        'CASE WHEN status = ? THEN 1 ELSE 0 END',
+                        [CandidateStatus::Rejected->value],
+                    )
+                    ->orderByDesc('score');
+            })
+            ->recordClasses(fn (StoryCandidate $record): ?string => $record->status === CandidateStatus::Rejected
+                ? 'bg-danger-50/70 dark:bg-danger-500/10'
+                : null)
             ->columns([
                 Split::make([
                     ImageColumn::make('media_preview')
@@ -77,6 +88,7 @@ class StoryCandidatesTable
                             ->label('Решение')
                             ->badge()
                             ->formatStateUsing(self::statusLabel(...))
+                            ->color(self::statusColor(...))
                             ->searchable(),
                         TextColumn::make('risk_flags')
                             ->label('Риски')
@@ -185,6 +197,16 @@ class StoryCandidatesTable
             'selected' => 'В плане',
             'reserve' => 'Резерв',
             default => (string) ($state->value ?? $state),
+        };
+    }
+
+    private static function statusColor(mixed $state): string
+    {
+        return match ($state->value ?? $state) {
+            'approved', 'selected' => 'success',
+            'rejected' => 'danger',
+            'reserve' => 'warning',
+            default => 'gray',
         };
     }
 

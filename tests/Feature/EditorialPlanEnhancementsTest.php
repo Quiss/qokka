@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Actions\ApprovePlannedPost;
 use App\Actions\GenerateCandidateBatch;
 use App\Actions\PlaceCandidateInPlan;
+use App\Actions\ReplenishContentPlanCandidates;
 use App\Actions\RequestPlannedPostRewrite;
 use App\CandidateStatus;
 use App\ContentPlanStatus;
@@ -17,6 +18,7 @@ use App\Filament\Resources\PlannedPosts\Pages\EditPlannedPost;
 use App\Filament\Resources\SourceChannels\Pages\EditSourceChannel;
 use App\Filament\Resources\SourceChannels\RelationManagers\PostsRelationManager;
 use App\Jobs\GenerateCandidateBatchJob;
+use App\Jobs\ReplenishContentPlanCandidatesJob;
 use App\Jobs\RewritePlannedPostJob;
 use App\Models\ContentPlan;
 use App\Models\Delivery;
@@ -263,6 +265,47 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertContains('older_than_24h', $candidate->risk_flags);
     }
 
+    public function test_candidate_review_can_replenish_all_rejected_candidates(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'candidate_target' => 9,
+        ]);
+        StoryCandidate::factory()->count(9)->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
+        ]);
+
+        $this->assertTrue(app(ReplenishContentPlanCandidates::class)->handle($plan));
+        $this->assertSame(ContentPlanStatus::Generating, $plan->fresh()->status);
+        Queue::assertPushed(
+            ReplenishContentPlanCandidatesJob::class,
+            fn (ReplenishContentPlanCandidatesJob $job): bool => $job->contentPlanId === $plan->id
+                && $job->candidateTarget === 9
+                && $job->completionStatus === ContentPlanStatus::CandidateReview,
+        );
+    }
+
+    public function test_candidate_review_replenishment_job_returns_plan_to_candidate_review(): void
+    {
+        $group = SourceGroup::factory()->create();
+        $publication = Publication::factory()->create(['source_group_id' => $group->id]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'status' => ContentPlanStatus::Generating,
+        ]);
+        $job = new ReplenishContentPlanCandidatesJob(
+            $plan->id,
+            9,
+            ContentPlanStatus::CandidateReview,
+        );
+
+        $job->handle(app(GenerateCandidateBatch::class));
+
+        $this->assertSame(ContentPlanStatus::CandidateReview, $plan->fresh()->status);
+    }
+
     public function test_ai_timeout_configuration_preserves_safe_queue_ordering(): void
     {
         $job = new GenerateCandidateBatchJob(1);
@@ -430,7 +473,7 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertNull($riskyPost->fresh()->override_reason);
     }
 
-    public function test_pending_candidate_batch_can_be_queued_for_regeneration_from_admin(): void
+    public function test_partially_moderated_candidate_batch_can_be_queued_for_regeneration_from_admin(): void
     {
         Queue::fake();
         $user = User::factory()->create(['is_active' => true]);
@@ -441,6 +484,14 @@ class EditorialPlanEnhancementsTest extends TestCase
         StoryCandidate::factory()->create([
             'content_plan_id' => $plan->id,
             'status' => CandidateStatus::Pending,
+        ]);
+        StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
         ]);
         $this->actingAs($user);
 
@@ -531,6 +582,56 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertSee('Детали события из первичного источника')
             ->assertSee('Основной источник')
             ->assertSee('Фото');
+    }
+
+    public function test_candidate_review_moves_rejected_news_down_and_offers_to_replenish_the_deficit(): void
+    {
+        Queue::fake();
+        $user = User::factory()->create(['is_active' => true]);
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'candidate_target' => 9,
+        ]);
+        $lowerPending = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'title' => 'Ожидает решения с низкой оценкой',
+            'status' => CandidateStatus::Pending,
+            'score' => 20,
+        ]);
+        $higherPending = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'title' => 'Ожидает решения с высокой оценкой',
+            'status' => CandidateStatus::Pending,
+            'score' => 80,
+        ]);
+        $rejectedCandidates = StoryCandidate::factory()->count(7)->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
+        ]);
+        $expectedOrder = collect([$higherPending, $lowerPending])
+            ->concat($rejectedCandidates->sortByDesc('score')->values());
+        $this->actingAs($user);
+        $replenishAction = TestAction::make('replenishCandidates')->table();
+
+        Livewire::test(StoryCandidatesRelationManager::class, [
+            'ownerRecord' => $plan,
+            'pageClass' => EditContentPlan::class,
+        ])
+            ->assertCanSeeTableRecords($expectedOrder, inOrder: true)
+            ->assertSee('Отклонена')
+            ->assertSeeHtml('bg-danger-50/70')
+            ->assertActionVisible($replenishAction)
+            ->assertActionHasLabel($replenishAction, 'Добрать новости (7)')
+            ->callAction($replenishAction)
+            ->assertNotified('Добор 7 новостей поставлен в очередь');
+
+        $this->assertSame(ContentPlanStatus::Generating, $plan->fresh()->status);
+        Queue::assertPushed(
+            ReplenishContentPlanCandidatesJob::class,
+            fn (ReplenishContentPlanCandidatesJob $job): bool => $job->contentPlanId === $plan->id
+                && $job->candidateTarget === 7
+                && $job->completionStatus === ContentPlanStatus::CandidateReview,
+        );
     }
 
     private function reserveCandidate(ContentPlan $plan, float $score): StoryCandidate

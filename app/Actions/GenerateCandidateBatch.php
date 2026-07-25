@@ -30,15 +30,24 @@ class GenerateCandidateBatch
     ): ContentPlan {
         $contentPlan->loadMissing('publication.sourceGroup.sourceChannels');
 
-        if (! $append && $contentPlan->storyCandidates()->where('status', '!=', CandidateStatus::Pending)->exists()) {
-            throw new LogicException('A moderated candidate batch cannot be regenerated.');
+        if (! $append && $contentPlan->plannedPosts()->exists()) {
+            throw new LogicException('A content plan with planned posts cannot be regenerated.');
         }
 
         $publication = $contentPlan->publication;
         $planDate = CarbonImmutable::parse($contentPlan->plan_date, $publication->timezone);
         $slots = $this->slotGenerator->generate($publication, $planDate);
         $candidateTarget = (int) ceil(count($slots) * (float) $publication->reserve_multiplier);
-        $requestedCandidates = $targetOverride ?? $candidateTarget;
+        $preservedCandidateCount = $append
+            ? 0
+            : $contentPlan->storyCandidates()
+                ->whereIn('status', [
+                    CandidateStatus::Approved,
+                    CandidateStatus::Reserve,
+                    CandidateStatus::Selected,
+                ])
+                ->count();
+        $requestedCandidates = $targetOverride ?? max(0, $candidateTarget - $preservedCandidateCount);
         $channelIds = $publication->sourceGroup->sourceChannels
             ->where('is_active', true)
             ->pluck('id');
@@ -63,10 +72,10 @@ class GenerateCandidateBatch
                             ->whereBelongsTo($publication),
                     ),
             )
-            ->when($append, fn ($query) => $query->whereDoesntHave(
+            ->whereDoesntHave(
                 'storyCandidates',
                 fn ($candidateQuery) => $candidateQuery->where('content_plan_id', $contentPlan->id),
-            ))
+            )
             ->orderByDesc('posted_at')
             ->limit(120)
             ->get()
@@ -77,7 +86,7 @@ class GenerateCandidateBatch
             $contentPlan->update(['slot_schedule' => $slots, 'candidate_target' => $candidateTarget]);
         }
 
-        if ($posts->isEmpty()) {
+        if ($posts->isEmpty() || $requestedCandidates === 0) {
             DB::transaction(function () use ($contentPlan, $append): void {
                 if (! $append) {
                     $contentPlan->storyCandidates()->where('status', CandidateStatus::Pending)->delete();

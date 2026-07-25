@@ -462,6 +462,103 @@ class ContentPlanningTest extends TestCase
         $this->assertEmpty(collect($fake->receivedPostIds)->intersect($blockedSourceIds));
     }
 
+    public function test_candidate_regeneration_preserves_decisions_and_replaces_only_pending_candidates(): void
+    {
+        $group = SourceGroup::factory()->create();
+        $channel = SourceChannel::factory()->create();
+        $group->sourceChannels()->attach($channel);
+        $publication = Publication::factory()->create([
+            'source_group_id' => $group->id,
+            'publish_window_start' => '09:00',
+            'publish_window_end' => '09:00',
+            'reserve_multiplier' => 2,
+        ]);
+        $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
+        $approvedSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'posted_at' => now()->subHour(),
+        ]);
+        $rejectedSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'posted_at' => now()->subHour(),
+        ]);
+        $pendingSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'posted_at' => now()->subHour(),
+        ]);
+        $freshSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'posted_at' => now()->subHour(),
+        ]);
+        $approvedCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $approvedCandidate->sourcePosts()->attach($approvedSource, ['is_primary' => true]);
+        $rejectedCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
+        ]);
+        $rejectedCandidate->sourcePosts()->attach($rejectedSource, ['is_primary' => true]);
+        $pendingCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Pending,
+        ]);
+        $pendingCandidate->sourcePosts()->attach($pendingSource, ['is_primary' => true]);
+
+        $fake = new class($freshSource->id) implements ContentIntelligence
+        {
+            /** @var list<int> */
+            public array $receivedPostIds = [];
+
+            public function __construct(private readonly int $freshSourceId) {}
+
+            public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
+            {
+                $this->receivedPostIds = array_values(
+                    $sourcePosts->pluck('id')->map(fn (mixed $id): int => (int) $id)->all(),
+                );
+
+                return ['clusters' => [[
+                    'source_post_ids' => [$this->freshSourceId],
+                    'title' => 'Новая замена',
+                    'summary' => 'Новая новость вместо кандидата без решения',
+                    'score' => 80,
+                    'risk_flags' => [],
+                ]]];
+            }
+
+            public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
+            {
+                return ['text' => ''];
+            }
+
+            public function reviewPlan(ContentPlan $contentPlan): array
+            {
+                return ['items' => [], 'duplicate_groups' => []];
+            }
+        };
+        $this->app->instance(ContentIntelligence::class, $fake);
+
+        app(GenerateCandidateBatch::class)->handle($plan);
+
+        $this->assertSame([$freshSource->id], $fake->receivedPostIds);
+        $this->assertModelExists($approvedCandidate);
+        $this->assertModelExists($rejectedCandidate);
+        $this->assertModelMissing($pendingCandidate);
+        $this->assertSame(CandidateStatus::Approved, $approvedCandidate->fresh()->status);
+        $this->assertSame(CandidateStatus::Rejected, $rejectedCandidate->fresh()->status);
+        $this->assertSame(2, $plan->fresh()->candidate_target);
+        $this->assertSame(2, $plan->storyCandidates()
+            ->whereIn('status', [CandidateStatus::Pending, CandidateStatus::Approved])
+            ->count());
+        $this->assertDatabaseHas('story_candidates', [
+            'content_plan_id' => $plan->id,
+            'title' => 'Новая замена',
+            'status' => CandidateStatus::Pending,
+        ]);
+    }
+
     public function test_candidate_generation_prevents_source_reuse_and_prefers_primary_source_with_media(): void
     {
         $group = SourceGroup::factory()->create();

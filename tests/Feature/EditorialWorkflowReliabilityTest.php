@@ -39,6 +39,21 @@ class EditorialWorkflowReliabilityTest extends TestCase
         Queue::assertPushed(GenerateCandidateBatchJob::class, 1);
     }
 
+    public function test_candidate_generation_cannot_be_queued_after_planned_posts_exist(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+
+        $this->assertFalse(app(QueueContentPlanGeneration::class)->handle($plan));
+        $this->assertSame(ContentPlanStatus::CandidateReview, $plan->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
     public function test_empty_candidate_batch_is_marked_as_generated(): void
     {
         $group = SourceGroup::factory()->create();

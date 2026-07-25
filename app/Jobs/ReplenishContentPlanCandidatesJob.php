@@ -24,6 +24,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public readonly int $contentPlanId,
         public readonly int $candidateTarget,
+        public readonly ContentPlanStatus $completionStatus = ContentPlanStatus::NeedsCandidates,
     ) {}
 
     public function uniqueId(): string
@@ -48,7 +49,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
         }
 
         $plan->update([
-            'status' => ContentPlanStatus::NeedsCandidates,
+            'status' => $this->completionStatus,
             'failure_reason' => null,
             'failed_at' => null,
         ]);
@@ -57,7 +58,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
     public function failed(?Throwable $exception): void
     {
         ContentPlan::query()->whereKey($this->contentPlanId)->update([
-            'status' => ContentPlanStatus::NeedsCandidates,
+            'status' => $this->completionStatus,
             'failure_reason' => $exception?->getMessage() ?? 'Не удалось добрать кандидатов.',
             'failed_at' => now(),
         ]);
