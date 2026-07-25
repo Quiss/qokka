@@ -10,6 +10,7 @@ use App\Models\ContentPlan;
 use App\Models\SourcePost;
 use App\Services\ContentPlanSlotGenerator;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use LogicException;
@@ -47,6 +48,21 @@ class GenerateCandidateBatch
             ->where('status', 'active')
             ->whereNull('deleted_at')
             ->whereBetween('posted_at', [now()->subHours($lookbackHours), now()])
+            ->whereDoesntHave(
+                'storyCandidates',
+                fn (Builder $candidateQuery): Builder => $candidateQuery
+                    ->whereIn('status', [
+                        CandidateStatus::Approved,
+                        CandidateStatus::Reserve,
+                        CandidateStatus::Selected,
+                    ])
+                    ->whereIn(
+                        'content_plan_id',
+                        ContentPlan::query()
+                            ->select('id')
+                            ->whereBelongsTo($publication),
+                    ),
+            )
             ->when($append, fn ($query) => $query->whereDoesntHave(
                 'storyCandidates',
                 fn ($candidateQuery) => $candidateQuery->where('content_plan_id', $contentPlan->id),

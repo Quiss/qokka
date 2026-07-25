@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Actions\GenerateCandidateBatch;
+use App\CandidateStatus;
 use App\Contracts\ContentIntelligence;
 use App\MediaType;
 use App\Models\AiRun;
@@ -354,6 +355,111 @@ class ContentPlanningTest extends TestCase
         $this->assertDatabaseCount('story_candidates', 1);
         $this->assertDatabaseHas('story_candidates', ['content_plan_id' => $plan->id, 'title' => 'Городской проект']);
         $this->assertDatabaseHas('source_post_story_candidate', ['source_post_id' => $news->id, 'is_primary' => true]);
+    }
+
+    public function test_candidate_generation_excludes_approved_sources_from_previous_plans_for_the_same_publication(): void
+    {
+        $group = SourceGroup::factory()->create();
+        $channel = SourceChannel::factory()->create();
+        $group->sourceChannels()->attach($channel);
+        $publication = Publication::factory()->create(['source_group_id' => $group->id]);
+        $previousPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => today(),
+        ]);
+        $currentPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => today()->addDay(),
+        ]);
+        $blockedSourceIds = [];
+
+        foreach ([CandidateStatus::Approved, CandidateStatus::Reserve, CandidateStatus::Selected] as $status) {
+            $sourcePost = SourcePost::factory()->create([
+                'source_channel_id' => $channel->id,
+                'text' => 'Одобренная новость '.$status->value,
+                'posted_at' => now()->subHour(),
+            ]);
+            $candidate = StoryCandidate::factory()->create([
+                'content_plan_id' => $previousPlan->id,
+                'status' => $status,
+            ]);
+            $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+            $blockedSourceIds[] = $sourcePost->id;
+        }
+
+        $eligibleSourceIds = [];
+
+        foreach ([CandidateStatus::Pending, CandidateStatus::Rejected] as $status) {
+            $sourcePost = SourcePost::factory()->create([
+                'source_channel_id' => $channel->id,
+                'text' => 'Неиспользованная новость '.$status->value,
+                'posted_at' => now()->subHour(),
+            ]);
+            $candidate = StoryCandidate::factory()->create([
+                'content_plan_id' => $previousPlan->id,
+                'status' => $status,
+            ]);
+            $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+            $eligibleSourceIds[] = $sourcePost->id;
+        }
+
+        $otherPublication = Publication::factory()->create(['source_group_id' => $group->id]);
+        $otherPlan = ContentPlan::factory()->create([
+            'publication_id' => $otherPublication->id,
+            'plan_date' => today(),
+        ]);
+        $otherPublicationSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Новость другого канала публикаций',
+            'posted_at' => now()->subHour(),
+        ]);
+        $otherPublicationCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $otherPlan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $otherPublicationCandidate->sourcePosts()->attach($otherPublicationSource, ['is_primary' => true]);
+        $eligibleSourceIds[] = $otherPublicationSource->id;
+
+        $freshSource = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Новая новость',
+            'posted_at' => now()->subHour(),
+        ]);
+        $eligibleSourceIds[] = $freshSource->id;
+
+        $fake = new class implements ContentIntelligence
+        {
+            /** @var list<int> */
+            public array $receivedPostIds = [];
+
+            public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
+            {
+                $this->receivedPostIds = array_values(
+                    $sourcePosts->pluck('id')->map(fn (mixed $id): int => (int) $id)->all(),
+                );
+
+                return ['clusters' => []];
+            }
+
+            public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
+            {
+                return ['text' => ''];
+            }
+
+            public function reviewPlan(ContentPlan $contentPlan): array
+            {
+                return ['items' => [], 'duplicate_groups' => []];
+            }
+        };
+        $this->app->instance(ContentIntelligence::class, $fake);
+
+        app(GenerateCandidateBatch::class)->handle($currentPlan);
+
+        $this->assertSame(
+            collect($eligibleSourceIds)->sort()->values()->all(),
+            collect($fake->receivedPostIds)->sort()->values()->all(),
+        );
+        $this->assertEmpty(collect($fake->receivedPostIds)->intersect($blockedSourceIds));
     }
 
     public function test_candidate_generation_prevents_source_reuse_and_prefers_primary_source_with_media(): void
