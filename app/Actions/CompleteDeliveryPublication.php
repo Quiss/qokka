@@ -33,11 +33,11 @@ class CompleteDeliveryPublication
             }
 
             $isManualConfirmation = $externalMessageIds === null;
-            $expectedStatus = $isManualConfirmation
-                ? DeliveryStatus::NeedsReview
-                : DeliveryStatus::Publishing;
+            $allowedStatuses = $isManualConfirmation
+                ? [DeliveryStatus::Publishing, DeliveryStatus::NeedsReview]
+                : [DeliveryStatus::Publishing];
 
-            if ($lockedDelivery->status !== $expectedStatus) {
+            if (! in_array($lockedDelivery->status, $allowedStatuses, true)) {
                 throw new LogicException("Delivery {$lockedDelivery->id} cannot be completed from status {$lockedDelivery->status->value}.");
             }
 

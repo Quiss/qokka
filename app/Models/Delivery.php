@@ -18,6 +18,7 @@ use Illuminate\Support\Carbon;
  * @property list<string>|null $external_message_ids
  * @property int $attempts
  * @property Carbon|null $next_attempt_at
+ * @property Carbon $updated_at
  * @property-read PlannedPost $plannedPost
  * @property-read Destination $destination
  */

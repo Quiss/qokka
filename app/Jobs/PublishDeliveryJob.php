@@ -11,9 +11,11 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Queue\Attributes\FailOnTimeout;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
+#[FailOnTimeout]
 class PublishDeliveryJob implements ShouldQueue
 {
     use Queueable;
@@ -93,5 +95,35 @@ class PublishDeliveryJob implements ShouldQueue
                 'error_context' => ['reason' => 'state_update_failed_after_publish'],
             ]);
         }
+    }
+
+    /**
+     * Handle a terminal job failure, including a worker timeout.
+     */
+    public function failed(?Throwable $exception): void
+    {
+        DB::transaction(function () use ($exception): void {
+            $delivery = Delivery::query()
+                ->lockForUpdate()
+                ->find($this->deliveryId);
+
+            if ($delivery === null || $delivery->status !== DeliveryStatus::Publishing) {
+                return;
+            }
+
+            $failedAt = now();
+            $delivery->update([
+                'status' => DeliveryStatus::NeedsReview,
+                'last_error' => $exception?->getMessage() ?? 'Publication job failed while sending.',
+                'next_attempt_at' => null,
+                'is_ambiguous' => true,
+                'error_context' => [
+                    'reason' => 'publication_job_failed_while_sending',
+                    'exception' => $exception !== null ? $exception::class : null,
+                    'failed_at' => $failedAt->toIso8601String(),
+                    'previous_context' => $delivery->error_context,
+                ],
+            ]);
+        });
     }
 }

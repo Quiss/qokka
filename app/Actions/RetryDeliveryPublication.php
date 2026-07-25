@@ -12,6 +12,19 @@ use LogicException;
 
 class RetryDeliveryPublication
 {
+    public function __construct(
+        private readonly RecoverStaleDeliveryPublications $recoverStaleDeliveryPublications,
+    ) {}
+
+    public function isAvailable(Delivery $delivery): bool
+    {
+        if (in_array($delivery->status, [DeliveryStatus::NeedsReview, DeliveryStatus::Failed], true)) {
+            return true;
+        }
+
+        return $this->recoverStaleDeliveryPublications->isStale($delivery);
+    }
+
     public function handle(Delivery $delivery, ?User $requestedBy = null): bool
     {
         return DB::transaction(function () use ($delivery, $requestedBy): bool {
@@ -24,7 +37,7 @@ class RetryDeliveryPublication
                 return false;
             }
 
-            if (! in_array($lockedDelivery->status, [DeliveryStatus::NeedsReview, DeliveryStatus::Failed], true)) {
+            if (! $this->isAvailable($lockedDelivery)) {
                 throw new LogicException("Delivery {$lockedDelivery->id} cannot be retried from status {$lockedDelivery->status->value}.");
             }
 

@@ -87,14 +87,18 @@ class DeliveriesTable
             ])
             ->recordActions([
                 Action::make('confirmPublished')
-                    ->label('Подтвердить публикацию')
+                    ->label('Отметить опубликованным')
                     ->icon('heroicon-m-check-circle')
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading('Подтвердить, что пост опубликован?')
                     ->modalDescription('Используйте это действие, только если вы нашли публикацию в Telegram. Повторной отправки не будет.')
                     ->modalSubmitActionLabel('Да, пост опубликован')
-                    ->visible(fn (Delivery $record): bool => $record->status === DeliveryStatus::NeedsReview)
+                    ->visible(fn (Delivery $record): bool => in_array(
+                        $record->status,
+                        [DeliveryStatus::Publishing, DeliveryStatus::NeedsReview],
+                        true,
+                    ))
                     ->action(function (Delivery $record, CompleteDeliveryPublication $complete): void {
                         $user = auth()->user();
                         $complete->handle($record, confirmedBy: $user instanceof User ? $user : null);
@@ -104,14 +108,14 @@ class DeliveriesTable
                             ->send();
                     }),
                 Action::make('retryPublication')
-                    ->label('Повторить отправку')
+                    ->label('Отправить повторно')
                     ->icon('heroicon-m-arrow-path')
                     ->color('warning')
                     ->requiresConfirmation()
-                    ->modalHeading('Повторить отправку в Telegram?')
-                    ->modalDescription('Если Telegram уже принял предыдущий запрос, повторная отправка создаст дубль. Сначала обязательно проверьте канал.')
-                    ->modalSubmitActionLabel('Повторить с риском дубля')
-                    ->visible(fn (Delivery $record): bool => in_array($record->status, [DeliveryStatus::NeedsReview, DeliveryStatus::Failed], true))
+                    ->modalHeading('Отправить пост в Telegram повторно?')
+                    ->modalDescription('Нажимайте только если публикации точно нет в канале. Если Telegram уже принял предыдущий запрос, повторная отправка создаст дубль.')
+                    ->modalSubmitActionLabel('Отправить повторно')
+                    ->visible(fn (Delivery $record, RetryDeliveryPublication $retry): bool => $retry->isAvailable($record))
                     ->action(function (Delivery $record, RetryDeliveryPublication $retry): void {
                         $user = auth()->user();
                         $queued = $retry->handle($record, $user instanceof User ? $user : null);

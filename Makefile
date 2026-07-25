@@ -14,6 +14,8 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
 PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
+PUBLISH_DRAIN_TIMEOUT ?= 620
+PUBLISH_QUEUE ?= redis:publish
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
 	--env HOME=/tmp \
@@ -33,10 +35,16 @@ first:
 		echo "APP_KEY already exists; keeping it unchanged."; \
 	fi
 deploy:
-	git pull
-	$(PRODUCTION_COMPOSE) exec app php artisan optimize
-	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force
-	$(MAKE) restart-all
+	@set -eu; \
+	trap '$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
+	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
+	git pull; \
+	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
+	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
+	$(MAKE) restart-all; \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
+	trap - 0 1 2 15
 
 deploy-full: backup deploy
 	@echo "Full deploy with backup completed"
