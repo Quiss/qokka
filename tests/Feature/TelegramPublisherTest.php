@@ -10,8 +10,11 @@ use App\Models\Publication;
 use App\Models\StoryCandidate;
 use App\Services\TelegramPublisher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use ReflectionMethod;
+use ReflectionProperty;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -48,6 +51,22 @@ class TelegramPublisherTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://tgprx.orangepanda.ru/bottest-token/sendMessage'
             && $request['chat_id'] === '@poka_trend'
             && $request['text'] === 'Готовый пост');
+    }
+
+    public function test_telegram_client_uses_configured_publish_timeouts(): void
+    {
+        config([
+            'services.telegram.bot_token' => 'test-token',
+            'services.telegram.bot_api_timeout' => 300,
+            'services.telegram.bot_api_connect_timeout' => 10,
+        ]);
+        $method = new ReflectionMethod(TelegramPublisher::class, 'client');
+        $client = $method->invoke(app(TelegramPublisher::class));
+        $property = new ReflectionProperty(PendingRequest::class, 'options');
+        $options = $property->getValue($client);
+
+        $this->assertSame(300, $options['timeout']);
+        $this->assertSame(10, $options['connect_timeout']);
     }
 
     public function test_destination_validation_identifies_the_configured_admin_bot(): void

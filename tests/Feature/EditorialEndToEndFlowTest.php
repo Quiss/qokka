@@ -20,7 +20,6 @@ use App\Models\SourceGroup;
 use App\Models\SourcePost;
 use App\Models\User;
 use App\PlannedPostStatus;
-use App\Services\TelegramPublisher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
@@ -117,7 +116,7 @@ class EditorialEndToEndFlowTest extends TestCase
             ]),
         ]);
 
-        (new PublishDeliveryJob($delivery->id))->handle(app(TelegramPublisher::class));
+        app()->call([(new PublishDeliveryJob($delivery->id)), 'handle']);
 
         $this->assertSame(PlannedPostStatus::Published, $plannedPost->fresh()->status);
         $this->assertSame(ContentPlanStatus::Completed, $plan->fresh()->status);

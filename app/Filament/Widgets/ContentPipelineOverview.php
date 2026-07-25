@@ -4,6 +4,7 @@ namespace App\Filament\Widgets;
 
 use App\CandidateStatus;
 use App\DeliveryStatus;
+use App\Filament\Resources\Deliveries\DeliveryResource;
 use App\Models\Delivery;
 use App\Models\PlannedPost;
 use App\Models\SourcePost;
@@ -23,6 +24,8 @@ class ContentPipelineOverview extends StatsOverviewWidget
             Stat::make('Постов на финальной модерации', PlannedPost::query()->whereIn('status', [PlannedPostStatus::FinalReview, PlannedPostStatus::Blocked])->count())
                 ->color('info'),
             Stat::make('Проблемных доставок', Delivery::query()->whereIn('status', [DeliveryStatus::NeedsReview, DeliveryStatus::Failed])->count())
+                ->description('Открыть доставки, требующие решения')
+                ->url(DeliveryResource::getUrl('index'))
                 ->color('danger'),
         ];
     }

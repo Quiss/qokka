@@ -22,6 +22,7 @@ PHP_BOOTSTRAP := docker run --rm \
 	--workdir /var/www/html \
 	--entrypoint /bin/sh \
 	$(PHP_BOOTSTRAP_IMAGE) -lc
+PRODUCTION_COMPOSE ?= docker compose -f docker-compose.production.yml
 
 first:
 	@test -f .env || cp .env.example .env
@@ -33,9 +34,9 @@ first:
 	fi
 deploy:
 	git pull
-	docker compose exec app php artisan optimize
-	docker compose exec app php artisan migrate --force
-	docker compose exec app php artisan octane:reload
+	$(PRODUCTION_COMPOSE) exec app php artisan optimize
+	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force
+	$(MAKE) restart-all
 
 deploy-full: backup deploy
 	@echo "Full deploy with backup completed"
@@ -71,7 +72,7 @@ backup: backup-init backup-db backup-storage backup-cleanup
 # Database backup
 backup-db: backup-init
 	@echo "Creating database backup..."
-	docker compose exec -T pgsql pg_dump -U $(DB_USERNAME) -d $(DB_DATABASE) | gzip > $(BACKUP_DIR)/db-$(TIMESTAMP).sql.gz
+	$(PRODUCTION_COMPOSE) exec -T pgsql pg_dump -U $(DB_USERNAME) -d $(DB_DATABASE) | gzip > $(BACKUP_DIR)/db-$(TIMESTAMP).sql.gz
 	@echo "Database backup saved: $(BACKUP_DIR)/db-$(TIMESTAMP).sql.gz"
 
 # Storage backup
@@ -107,7 +108,7 @@ restore-db-latest:
 		echo "No backup found"; exit 1; \
 	fi; \
 	echo "Restoring from: $$LATEST"; \
-	gunzip -c $$LATEST | docker compose exec -T pgsql psql -U $(DB_USERNAME) -d $(DB_DATABASE)
+	gunzip -c $$LATEST | $(PRODUCTION_COMPOSE) exec -T pgsql psql -U $(DB_USERNAME) -d $(DB_DATABASE)
 	@echo "Database restored"
 
 # Restore storage from latest backup
@@ -125,33 +126,40 @@ restore-storage-latest:
 # Workers Restart
 # ===========================================
 
+# Reload Octane workers gracefully
+restart-app:
+	$(PRODUCTION_COMPOSE) exec app php artisan octane:reload
+	@echo "Application workers reloaded"
+
 # Restart Horizon (graceful)
 restart-horizon:
-	docker compose exec horizon php artisan horizon:terminate
+	$(PRODUCTION_COMPOSE) exec app php artisan horizon:terminate
 	@echo "Horizon will restart automatically"
 
 # Restart Scheduler (with lock cleanup)
 restart-scheduler:
-	docker compose exec app php artisan schedule:clear-cache
-	docker compose restart scheduler
-	docker compose exec app php artisan schedule:clear-cache
+	$(PRODUCTION_COMPOSE) exec app php artisan schedule:clear-cache
+	$(PRODUCTION_COMPOSE) restart scheduler
+	$(PRODUCTION_COMPOSE) exec app php artisan schedule:clear-cache
 	@echo "Scheduler restarted with cleared locks"
 
-restart-reverb:
-	docker compose restart reverb
+# Restart MadelineProto gracefully so sessions can be serialized
+restart-madeline:
+	$(PRODUCTION_COMPOSE) restart --timeout 120 madeline
+	@echo "MadelineProto listener restarted"
 
-# Restart all workers (horizon + scheduler)
-restart-workers: restart-horizon restart-scheduler restart-reverb
+# Restart all background workers
+restart-workers: restart-horizon restart-scheduler restart-madeline
 	@echo "All workers restarted"
 
-# Full reload (octane + horizon + scheduler)
+# Restart the application and all background workers
+restart-all: restart-app restart-workers
+	@echo "Application and all workers restarted"
+
+# Rebuild Laravel caches and reload all long-running application services
 reload-all:
-	docker compose exec app php artisan optimize
-	docker compose exec app php artisan octane:reload
-	docker compose exec app php artisan horizon:terminate
-	docker compose exec app php artisan schedule:clear-cache
-	docker compose restart scheduler
-	docker compose restart reverb
+	$(PRODUCTION_COMPOSE) exec app php artisan optimize
+	$(MAKE) restart-all
 	@echo "All services reloaded"
 
 # ===========================================
@@ -177,5 +185,6 @@ import-db:
 .PHONY: first deploy deploy-full staging build \
         backup backup-init backup-db backup-storage backup-cleanup backup-list \
         restore-db-latest restore-storage-latest \
-        restart-horizon restart-scheduler restart-workers reload-all \
+        restart-app restart-horizon restart-scheduler restart-madeline \
+        restart-workers restart-all reload-all \
         import-db

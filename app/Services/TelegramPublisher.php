@@ -157,8 +157,8 @@ class TelegramPublisher implements Publisher
 
         return Http::baseUrl($baseUrl.'/bot'.$token)
             ->acceptJson()
-            ->connectTimeout(10)
-            ->timeout(60);
+            ->connectTimeout((int) config('services.telegram.bot_api_connect_timeout', 10))
+            ->timeout((int) config('services.telegram.bot_api_timeout', 300));
     }
 
     /** @return list<string> */
