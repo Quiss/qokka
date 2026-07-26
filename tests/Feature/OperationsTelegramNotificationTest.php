@@ -205,7 +205,7 @@ class OperationsTelegramNotificationTest extends TestCase
                 && $job->title === 'Терминальный сбой: не удалось собрать контент-план'
                 && in_array('Очередь: redis/ai', $job->details, true)
                 && in_array('Ошибка: OpenRouter недоступен', $job->details, true)
-                && str_ends_with($job->url, '/admin'),
+                && str_ends_with($job->url, '/horizon/failed'),
         );
     }
 

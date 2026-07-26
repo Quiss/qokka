@@ -20,6 +20,7 @@ use Filament\Tables\Columns\Layout\Stack;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Validation\ValidationException;
 
 class ContentPlansTable
 {
@@ -107,10 +108,19 @@ class ContentPlansTable
                         ->icon('heroicon-m-check')
                         ->color('success')
                         ->requiresConfirmation()
+                        ->modalDescription('В план войдут только одобренные новости. Если их меньше рассчитанного числа слотов, план будет сокращён без добора.')
                         ->visible(fn (ContentPlan $record): bool => $record->status === ContentPlanStatus::CandidateReview)
                         ->action(function (ContentPlan $record, BuildContentPlan $buildContentPlan): void {
-                            $buildContentPlan->handle($record);
-                            Notification::make()->title('План утверждён, рерайт запущен')->success()->send();
+                            try {
+                                $buildContentPlan->handle($record);
+                                Notification::make()->title('План утверждён, рерайт запущен')->success()->send();
+                            } catch (ValidationException $exception) {
+                                Notification::make()
+                                    ->title('План не утверждён')
+                                    ->body(self::validationMessage($exception))
+                                    ->danger()
+                                    ->send();
+                            }
                         }),
                     Action::make('retry')
                         ->label('Повторить')
@@ -166,5 +176,12 @@ class ContentPlansTable
             'failed' => 'Ошибка',
             default => (string) ($state->value ?? $state),
         };
+    }
+
+    private static function validationMessage(ValidationException $exception): string
+    {
+        $message = collect($exception->errors())->flatten()->first();
+
+        return is_string($message) ? $message : 'Проверьте кандидатов и повторите попытку.';
     }
 }

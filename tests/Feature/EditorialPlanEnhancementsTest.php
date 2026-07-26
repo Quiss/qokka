@@ -612,6 +612,42 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertSee('Фото');
     }
 
+    public function test_source_post_with_failed_media_exposes_an_explicit_retry_action(): void
+    {
+        Queue::fake();
+        $user = User::factory()->create(['is_active' => true]);
+        $channel = SourceChannel::factory()->create();
+        $sourcePost = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'posted_at' => now()->subHour(),
+        ]);
+        $mediaAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'path' => null,
+            'downloaded_at' => null,
+            'failed_at' => now(),
+            'metadata' => ['download_error' => 'Telegram file size mismatch.'],
+        ]);
+        $this->actingAs($user);
+
+        Livewire::test(PostsRelationManager::class, [
+            'ownerRecord' => $channel,
+            'pageClass' => EditSourceChannel::class,
+        ])
+            ->assertActionVisible(TestAction::make('retry_media_download')->table($sourcePost))
+            ->callAction(TestAction::make('retry_media_download')->table($sourcePost))
+            ->assertNotified('Повторная загрузка медиа поставлена в очередь');
+
+        $mediaAsset->refresh();
+        $this->assertNull($mediaAsset->failed_at);
+        $this->assertArrayNotHasKey('download_error', $mediaAsset->metadata ?? []);
+        Queue::assertPushedOn(
+            'telegram',
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $mediaAsset->id
+                && ! $job->previewOnly,
+        );
+    }
+
     public function test_candidate_review_uses_compact_rows_and_opens_cluster_with_source_media(): void
     {
         $user = User::factory()->create(['is_active' => true]);

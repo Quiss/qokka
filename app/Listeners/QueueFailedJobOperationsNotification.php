@@ -42,7 +42,7 @@ class QueueFailedJobOperationsNotification
                 'Задача: '.$jobName,
                 'Ошибка: '.($error !== '' ? $error : $event->exception::class),
             ],
-            route('filament.admin.pages.dashboard'),
+            route('horizon.index', ['view' => 'failed']),
         );
     }
 

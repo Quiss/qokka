@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Actions\ApprovePlannedPost;
 use App\Actions\ApproveStoryCandidate;
 use App\Actions\BuildContentPlan;
+use App\Actions\PopulateContentPlanSafetyNet;
 use App\CandidateStatus;
+use App\ContentPlanStatus;
 use App\DeliveryStatus;
 use App\Jobs\RewritePlannedPostJob;
 use App\Models\ContentPlan;
@@ -18,6 +20,7 @@ use App\Models\User;
 use App\PlannedPostStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class ModerationFlowTest extends TestCase
@@ -94,5 +97,63 @@ class ModerationFlowTest extends TestCase
             'status' => PlannedPostStatus::Rewriting->value,
         ]);
         Queue::assertPushed(RewritePlannedPostJob::class);
+    }
+
+    public function test_approved_short_plan_is_built_without_replenishment(): void
+    {
+        Queue::fake();
+        $slots = [
+            now()->addDay()->toIso8601String(),
+            now()->addDay()->addHours(2)->toIso8601String(),
+            now()->addDay()->addHours(4)->toIso8601String(),
+        ];
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'slot_schedule' => $slots,
+        ]);
+        $candidates = StoryCandidate::factory()
+            ->count(2)
+            ->create([
+                'content_plan_id' => $plan->id,
+                'status' => CandidateStatus::Approved,
+            ]);
+
+        foreach ($candidates as $candidate) {
+            $sourcePost = SourcePost::factory()->create();
+            $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        }
+
+        app(BuildContentPlan::class)->handle($plan);
+
+        $builtPlan = $plan->fresh();
+
+        $this->assertSame(ContentPlanStatus::Rewriting, $builtPlan->status);
+        $this->assertSame(array_slice($slots, 0, 2), $builtPlan->slot_schedule);
+        $this->assertCount(2, $builtPlan->plannedPosts);
+        $this->assertSame(0, app(PopulateContentPlanSafetyNet::class)->futureVacantSlotCount($builtPlan));
+        Queue::assertPushed(RewritePlannedPostJob::class, 2);
+    }
+
+    public function test_plan_cannot_be_built_without_approved_candidates(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'slot_schedule' => [now()->addDay()->toIso8601String()],
+        ]);
+
+        try {
+            app(BuildContentPlan::class)->handle($plan);
+            $this->fail('A plan without approved candidates should not be built.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                'Одобрите хотя бы одного кандидата перед запуском рерайта.',
+                $exception->errors()['candidates'][0],
+            );
+        }
+
+        $this->assertSame(ContentPlanStatus::CandidateReview, $plan->fresh()->status);
+        $this->assertDatabaseCount('planned_posts', 0);
+        Queue::assertNothingPushed();
     }
 }

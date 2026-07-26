@@ -2,9 +2,11 @@
 
 namespace App\Filament\Resources\SourceChannels\RelationManagers;
 
+use App\Actions\QueueMediaAssetDownloadRetries;
 use App\Models\MediaAsset;
 use App\Models\SourcePost;
 use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
@@ -103,6 +105,33 @@ class PostsRelationManager extends RelationManager
                     ->url(fn (SourcePost $record): ?string => $record->source_url)
                     ->openUrlInNewTab()
                     ->visible(fn (SourcePost $record): bool => filled($record->source_url)),
+                Action::make('retry_media_download')
+                    ->label('Повторить загрузку медиа')
+                    ->icon('heroicon-m-arrow-path')
+                    ->color('warning')
+                    ->requiresConfirmation()
+                    ->modalDescription('Исходное сообщение будет заново получено из Telegram, после чего загрузка медиа повторится.')
+                    ->visible(fn (SourcePost $record): bool => $record->mediaAssets->contains(
+                        fn (MediaAsset $asset): bool => blank($asset->path) && $asset->failed_at !== null,
+                    ))
+                    ->action(function (
+                        SourcePost $record,
+                        QueueMediaAssetDownloadRetries $queueMediaAssetDownloadRetries,
+                    ): void {
+                        $queued = $queueMediaAssetDownloadRetries->handle(
+                            $record->mediaAssets->filter(
+                                fn (MediaAsset $asset): bool => blank($asset->path)
+                                    && $asset->failed_at !== null,
+                            ),
+                        );
+
+                        Notification::make()
+                            ->title($queued > 0
+                                ? 'Повторная загрузка медиа поставлена в очередь'
+                                : 'Нет медиа для повторной загрузки')
+                            ->status($queued > 0 ? 'success' : 'warning')
+                            ->send();
+                    }),
             ]);
     }
 

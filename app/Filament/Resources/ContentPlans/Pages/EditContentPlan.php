@@ -12,6 +12,7 @@ use App\Models\ContentPlan;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Validation\ValidationException;
 use LogicException;
 
 class EditContentPlan extends EditRecord
@@ -35,10 +36,19 @@ class EditContentPlan extends EditRecord
                 ->label('Утвердить план и запустить рерайт')
                 ->color('success')
                 ->requiresConfirmation()
+                ->modalDescription('В план войдут только одобренные новости. Если их меньше рассчитанного числа слотов, план будет сокращён без добора.')
                 ->visible(fn (): bool => $this->contentPlan()->status === ContentPlanStatus::CandidateReview)
                 ->action(function (BuildContentPlan $buildContentPlan): void {
-                    $buildContentPlan->handle($this->contentPlan());
-                    Notification::make()->title('План утверждён, рерайт запущен')->success()->send();
+                    try {
+                        $buildContentPlan->handle($this->contentPlan());
+                        Notification::make()->title('План утверждён, рерайт запущен')->success()->send();
+                    } catch (ValidationException $exception) {
+                        Notification::make()
+                            ->title('План не утверждён')
+                            ->body($this->validationMessage($exception))
+                            ->danger()
+                            ->send();
+                    }
                 }),
             Action::make('regenerate')
                 ->label('Пересобрать новости')
@@ -95,5 +105,12 @@ class EditContentPlan extends EditRecord
         }
 
         return $record;
+    }
+
+    private function validationMessage(ValidationException $exception): string
+    {
+        $message = collect($exception->errors())->flatten()->first();
+
+        return is_string($message) ? $message : 'Проверьте кандидатов и повторите попытку.';
     }
 }

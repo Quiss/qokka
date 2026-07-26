@@ -31,25 +31,33 @@ class BuildContentPlan
             }
 
             $slots = $lockedPlan->slot_schedule ?? [];
+
+            if ($slots === []) {
+                throw ValidationException::withMessages([
+                    'candidates' => 'В контент-плане нет слотов для публикации.',
+                ]);
+            }
+
             $selected = $lockedPlan->storyCandidates
                 ->where('status', CandidateStatus::Approved)
                 ->sortByDesc('score')
                 ->take(count($slots))
                 ->values();
 
-            if ($selected->count() < count($slots)) {
+            if ($selected->isEmpty()) {
                 throw ValidationException::withMessages([
-                    'candidates' => 'Одобрено недостаточно кандидатов для заполнения всех слотов.',
+                    'candidates' => 'Одобрите хотя бы одного кандидата перед запуском рерайта.',
                 ]);
             }
 
+            $selectedSlots = array_slice($slots, 0, $selected->count());
             $ids = [];
 
             foreach ($selected as $index => $candidate) {
                 $candidate->update(['status' => CandidateStatus::Selected]);
                 $plannedPost = $lockedPlan->plannedPosts()->create([
                     'story_candidate_id' => $candidate->id,
-                    'scheduled_at' => CarbonImmutable::parse($slots[$index]),
+                    'scheduled_at' => CarbonImmutable::parse($selectedSlots[$index]),
                 ]);
                 $primarySource = $candidate->sourcePosts->firstWhere('pivot.is_primary', true) ?? $candidate->sourcePosts->first();
 
@@ -67,6 +75,7 @@ class BuildContentPlan
                 ->update(['status' => CandidateStatus::Reserve]);
             $lockedPlan->update([
                 'status' => ContentPlanStatus::Rewriting,
+                'slot_schedule' => $selectedSlots,
                 'failure_reason' => null,
                 'failed_at' => null,
             ]);

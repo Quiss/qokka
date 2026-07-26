@@ -2,18 +2,22 @@
 
 namespace App\Services;
 
+use App\Actions\QueueMediaAssetDownloadRetries;
 use App\Jobs\DownloadMediaAssetJob;
 use App\MediaType;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\StoryCandidate;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class PlannedPostMediaManager
 {
+    public function __construct(
+        private readonly QueueMediaAssetDownloadRetries $queueMediaAssetDownloadRetries,
+    ) {}
+
     public function copyDefaultSelection(PlannedPost $plannedPost, StoryCandidate $candidate): void
     {
         $candidate->loadMissing('sourcePosts.mediaAssets');
@@ -147,35 +151,11 @@ class PlannedPostMediaManager
 
     public function queueUnpreparedSelectionDownloads(PlannedPost $plannedPost): int
     {
-        $originIds = $plannedPost->mediaAssets()
-            ->whereNull('path')
-            ->get(['id', 'origin_media_asset_id'])
-            ->map(fn (MediaAsset $asset): int => $asset->origin_media_asset_id ?? $asset->id)
-            ->unique()
-            ->values();
-        $origins = MediaAsset::query()
-            ->whereKey($originIds)
-            ->get();
-
-        $origins->each(function (MediaAsset $origin): void {
-            $metadata = Arr::except(
-                is_array($origin->metadata) ? $origin->metadata : [],
-                ['download_error'],
-            );
-            $origin->update([
-                'failed_at' => null,
-                'metadata' => $metadata,
-            ]);
-            MediaAsset::query()
-                ->where('origin_media_asset_id', $origin->id)
-                ->update([
-                    'failed_at' => null,
-                    'metadata' => $metadata,
-                ]);
-            DownloadMediaAssetJob::dispatch($origin->id)->onQueue('telegram');
-        });
-
-        return $origins->count();
+        return $this->queueMediaAssetDownloadRetries->handle(
+            $plannedPost->mediaAssets()
+                ->whereNull('path')
+                ->get(),
+        );
     }
 
     /** @return Collection<int, MediaAsset> */
