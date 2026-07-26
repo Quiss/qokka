@@ -66,7 +66,7 @@ return [
         'bridge_url' => env('TELEGRAM_BRIDGE_URL', env('APP_URL').'/api/internal/telegram/updates'),
         'subscriptions_url' => env('TELEGRAM_SUBSCRIPTIONS_URL', env('APP_URL').'/api/internal/telegram/subscriptions'),
         'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 50 * 1024 * 1024),
-        'database_max_connections' => (int) env('TELEGRAM_DATABASE_MAX_CONNECTIONS', 2),
+        'database_max_connections' => (int) env('TELEGRAM_DATABASE_MAX_CONNECTIONS', 1),
         'database_idle_timeout' => (int) env('TELEGRAM_DATABASE_IDLE_TIMEOUT', 10),
     ],
 

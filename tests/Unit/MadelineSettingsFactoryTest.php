@@ -9,6 +9,21 @@ use Tests\TestCase;
 
 class MadelineSettingsFactoryTest extends TestCase
 {
+    public function test_it_defaults_each_telegram_session_to_one_database_connection(): void
+    {
+        config([
+            'database.default' => 'pgsql',
+            'services.telegram.api_id' => 12345,
+            'services.telegram.api_hash' => 'test-api-hash',
+        ]);
+        $account = new TelegramAccount(['uuid' => 'c1b0acaa-9df6-44e3-b913-04df40501e32']);
+
+        $database = app(MadelineSettingsFactory::class)->make($account)->getDb();
+
+        $this->assertInstanceOf(Postgres::class, $database);
+        $this->assertSame(1, $database->getMaxConnections());
+    }
+
     public function test_it_limits_each_telegram_session_database_pool(): void
     {
         config([

@@ -40,6 +40,7 @@ services:
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
+      DB_APPLICATION_NAME: channelbot-app
       OCTANE_SERVER: frankenphp
       OCTANE_HTTPS: "true"
       OCTANE_WORKERS: ${OCTANE_WORKERS:-6}
@@ -67,6 +68,8 @@ services:
     command: ["php", "artisan", "schedule:work", "--no-interaction"]
     stop_signal: SIGTERM
     stop_grace_period: 30s
+    environment:
+      DB_APPLICATION_NAME: channelbot-scheduler
     volumes: *app-volumes
     networks:
       - default
@@ -83,6 +86,8 @@ services:
     command: ["php", "artisan", "horizon", "--environment=production"]
     stop_signal: SIGTERM
     stop_grace_period: 370s
+    environment:
+      DB_APPLICATION_NAME: channelbot-horizon
     volumes: *app-volumes
     networks:
       - default
@@ -105,6 +110,9 @@ services:
     command: ["php", "artisan", "telegram:listen", "--no-interaction"]
     stop_signal: SIGTERM
     stop_grace_period: 120s
+    environment:
+      DB_APPLICATION_NAME: channelbot-madeline
+      TELEGRAM_DATABASE_MAX_CONNECTIONS: ${TELEGRAM_DATABASE_MAX_CONNECTIONS:-1}
     volumes: *app-volumes
     networks:
       - default
@@ -116,6 +124,12 @@ services:
   pgsql:
     image: postgres:17
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
     ports:
       - "127.0.0.1:5432:5432"
     environment:
