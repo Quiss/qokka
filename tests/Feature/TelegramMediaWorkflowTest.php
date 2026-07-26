@@ -479,9 +479,10 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame($asset->path, $selectedAsset->path);
     }
 
-    public function test_download_job_rejects_a_file_smaller_than_its_stored_size(): void
+    public function test_download_job_trusts_the_downloaded_size_instead_of_stored_telegram_metadata(): void
     {
         Storage::fake('local');
+        config(['services.telegram.media_max_bytes' => 10]);
         $account = TelegramAccount::factory()->create();
         $channel = SourceChannel::factory()->create([
             'telegram_peer_id' => -100123,
@@ -527,19 +528,13 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        try {
-            (new DownloadMediaAssetJob($asset->id))->handle($pool);
-            $this->fail('An incomplete Telegram file should be rejected.');
-        } catch (\RuntimeException $exception) {
-            $this->assertSame(
-                'Telegram загрузил файл не полностью: ожидалось 20 байт, получено 7.',
-                $exception->getMessage(),
-            );
-        }
+        (new DownloadMediaAssetJob($asset->id))->handle($pool);
 
-        $this->assertNull($asset->fresh()->path);
+        $asset->refresh();
+        $this->assertNotNull($asset->path);
+        $this->assertSame(7, $asset->size_bytes);
+        $this->assertSame(7, Storage::disk('local')->size($asset->path));
         $this->assertSame([], Storage::disk('local')->allFiles('telegram/tmp'));
-        $this->assertSame([], Storage::disk('local')->allFiles('telegram/media'));
     }
 
     public function test_download_job_ignores_missing_madeline_lock_during_cleanup(): void

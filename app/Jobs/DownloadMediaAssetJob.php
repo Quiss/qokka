@@ -72,10 +72,6 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             throw new RuntimeException('Для скачивания медиа не найден активный Telegram-аккаунт источника.');
         }
 
-        if (! $this->previewOnly && ($origin->size_bytes ?? 0) > (int) config('services.telegram.media_max_bytes')) {
-            throw new RuntimeException('Медиа превышает лимит Telegram 50 МБ.');
-        }
-
         $extension = $this->previewOnly ? 'jpg' : $this->extension($origin);
         $relativePath = 'telegram/'.($this->previewOnly ? 'previews' : 'media').'/'.now()->format('Y/m').'/'.Str::uuid().'.'.$extension;
         $absolutePath = Storage::disk('local')->path($relativePath);
@@ -244,12 +240,6 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 
         if ($actualSize <= 0) {
             throw new RuntimeException('Telegram вернул пустой файл.');
-        }
-
-        if (! $this->previewOnly && ($asset->size_bytes ?? 0) > 0 && $actualSize < $asset->size_bytes) {
-            throw new RuntimeException(
-                "Telegram загрузил файл не полностью: ожидалось {$asset->size_bytes} байт, получено {$actualSize}.",
-            );
         }
 
         if (! $this->previewOnly && $actualSize > (int) config('services.telegram.media_max_bytes')) {

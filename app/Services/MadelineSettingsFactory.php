@@ -31,6 +31,8 @@ class MadelineSettingsFactory
             ->setDatabase((string) ($connection['database'] ?? 'laravel'))
             ->setUsername((string) ($connection['username'] ?? 'root'))
             ->setPassword((string) ($connection['password'] ?? ''))
+            ->setMaxConnections(max(1, (int) config('services.telegram.database_max_connections')))
+            ->setIdleTimeout(max(1, (int) config('services.telegram.database_idle_timeout')))
             ->setEphemeralFilesystemPrefix('mp_'.str_replace('-', '_', $account->uuid).'_');
 
         $settings = (new Settings)->setDb($database);

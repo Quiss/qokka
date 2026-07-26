@@ -13,7 +13,10 @@ class MadelineClientFactory
     public function make(TelegramAccount $account): MadelineClient
     {
         return new MadelineProtoClient(
-            new API($this->settingsFactory->sessionPath($account)),
+            new API(
+                $this->settingsFactory->sessionPath($account),
+                $this->settingsFactory->make($account),
+            ),
         );
     }
 }
