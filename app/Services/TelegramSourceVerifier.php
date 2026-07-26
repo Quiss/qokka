@@ -57,9 +57,17 @@ class TelegramSourceVerifier
             ], static fn (mixed $value): bool => filled($value)));
         }
 
-        $this->assignTelegramCollector->handle($sourceChannel->fresh());
+        $this->assignTelegramCollector->handle(
+            $sourceChannel->fresh(),
+            ensureCurrentSubscription: true,
+            retryUnavailablePreferred: true,
+        );
 
-        return $sourceChannel->fresh(['telegramAccounts', 'collectorTelegramAccount']);
+        return $sourceChannel->fresh([
+            'telegramAccounts',
+            'collectorTelegramAccount',
+            'preferredCollectorTelegramAccount',
+        ]);
     }
 
     /**

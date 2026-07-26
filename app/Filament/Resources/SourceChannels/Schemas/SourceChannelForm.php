@@ -2,11 +2,14 @@
 
 namespace App\Filament\Resources\SourceChannels\Schemas;
 
+use App\Models\TelegramAccount;
+use App\TelegramAccountStatus;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Illuminate\Database\Eloquent\Builder;
 
 class SourceChannelForm
 {
@@ -34,6 +37,35 @@ class SourceChannelForm
                             ->required()
                             ->numeric()
                             ->default(1),
+                        Select::make('preferred_collector_telegram_account_id')
+                            ->label('Предпочтительный сборщик')
+                            ->relationship(
+                                name: 'preferredCollectorTelegramAccount',
+                                titleAttribute: 'name',
+                                modifyQueryUsing: fn (Builder $query): Builder => $query
+                                    ->where('is_active', true)
+                                    ->whereIn('status', [
+                                        TelegramAccountStatus::Authorized,
+                                        TelegramAccountStatus::Connected,
+                                    ])
+                                    ->orderBy('name'),
+                            )
+                            ->getOptionLabelFromRecordUsing(
+                                fn (TelegramAccount $record): string => sprintf(
+                                    '%s%s · %s',
+                                    $record->name,
+                                    $record->username ? ' (@'.$record->username.')' : '',
+                                    match ($record->status) {
+                                        TelegramAccountStatus::Connected => 'подключён',
+                                        TelegramAccountStatus::Authorized => 'авторизован',
+                                        default => $record->status->value,
+                                    },
+                                ),
+                            )
+                            ->placeholder('Автоматически')
+                            ->helperText('При недоступности выбранного аккаунта система временно назначит резервный и вернётся к этому аккаунту после восстановления.')
+                            ->searchable()
+                            ->preload(),
                         Select::make('sourceGroups')
                             ->label('Группы источников')
                             ->relationship('sourceGroups', 'name')

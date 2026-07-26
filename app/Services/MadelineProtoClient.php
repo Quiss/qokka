@@ -40,4 +40,9 @@ class MadelineProtoClient implements MadelineClient
     {
         return $this->api->getInfo($peer);
     }
+
+    public function joinChannel(int|string $channel): void
+    {
+        $this->api->channels->joinChannel(channel: $channel);
+    }
 }

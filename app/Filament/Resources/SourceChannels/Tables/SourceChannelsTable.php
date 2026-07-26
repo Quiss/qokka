@@ -14,13 +14,22 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Str;
 
 class SourceChannelsTable
 {
     public static function configure(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query): Builder => (new SourceChannel)->scopeWithLastDayStatistics($query))
+            ->modifyQueryUsing(function (Builder $query): Builder {
+                $query->with([
+                    'collectorTelegramAccount:id,name',
+                    'preferredCollectorTelegramAccount:id,name',
+                    'telegramAccounts:id,name',
+                ]);
+
+                return (new SourceChannel)->scopeWithLastDayStatistics($query);
+            })
             ->columns([
                 TextColumn::make('title')
                     ->label('Источник')
@@ -32,9 +41,35 @@ class SourceChannelsTable
                 TextColumn::make('sourceGroups.name')
                     ->label('Группы')
                     ->badge(),
+                TextColumn::make('preferredCollectorTelegramAccount.name')
+                    ->label('Предпочтительный сборщик')
+                    ->placeholder('Автоматически'),
                 TextColumn::make('collectorTelegramAccount.name')
-                    ->label('Аккаунт-сборщик')
+                    ->label('Текущий сборщик')
                     ->placeholder('Не назначен'),
+                TextColumn::make('collector_status')
+                    ->label('Статус сборщика')
+                    ->state(fn (SourceChannel $record): string => $record->collectorStatus())
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'automatic' => 'Автоматически',
+                        'preferred' => 'Предпочтительный',
+                        'fallback' => 'Резервный',
+                        default => 'Нет доступного',
+                    })
+                    ->badge()
+                    ->color(fn (SourceChannel $record): string => match ($record->collectorStatus()) {
+                        'preferred' => 'success',
+                        'fallback' => 'warning',
+                        'automatic' => 'info',
+                        default => 'danger',
+                    })
+                    ->description(function (SourceChannel $record): ?string {
+                        $lastError = $record->collectorLastError();
+
+                        return $lastError ? Str::limit($lastError, 100) : null;
+                    })
+                    ->tooltip(fn (SourceChannel $record): ?string => $record->collectorLastError())
+                    ->wrap(),
                 TextColumn::make('weight')
                     ->label('Вес')
                     ->numeric()

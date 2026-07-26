@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\TelegramSourceAccessStatus;
 use Database\Factories\SourceChannelFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -11,11 +12,14 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\Pivot;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 /**
  * @property int $id
  * @property int|null $collector_telegram_account_id
+ * @property int|null $preferred_collector_telegram_account_id
  * @property int|null $telegram_peer_id
  * @property string|null $username
  * @property string $title
@@ -30,8 +34,9 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, SourceGroup> $sourceGroups
  * @property-read Collection<int, TelegramAccount> $telegramAccounts
  * @property-read TelegramAccount|null $collectorTelegramAccount
+ * @property-read TelegramAccount|null $preferredCollectorTelegramAccount
  */
-#[Fillable(['collector_telegram_account_id', 'telegram_peer_id', 'username', 'title', 'weight', 'is_active', 'last_event_at', 'last_backfilled_at', 'metadata'])]
+#[Fillable(['collector_telegram_account_id', 'preferred_collector_telegram_account_id', 'telegram_peer_id', 'username', 'title', 'weight', 'is_active', 'last_event_at', 'last_backfilled_at', 'metadata'])]
 class SourceChannel extends Model
 {
     /** @use HasFactory<SourceChannelFactory> */
@@ -90,6 +95,79 @@ class SourceChannel extends Model
         return $this->belongsTo(TelegramAccount::class, 'collector_telegram_account_id');
     }
 
+    /** @return BelongsTo<TelegramAccount, $this> */
+    public function preferredCollectorTelegramAccount(): BelongsTo
+    {
+        return $this->belongsTo(TelegramAccount::class, 'preferred_collector_telegram_account_id');
+    }
+
+    public function hasAvailableAccessFor(int $telegramAccountId): bool
+    {
+        if (! $this->relationLoaded('telegramAccounts')) {
+            return $this->telegramAccounts()
+                ->whereKey($telegramAccountId)
+                ->wherePivot('access_status', TelegramSourceAccessStatus::Available->value)
+                ->exists();
+        }
+
+        $account = $this->telegramAccounts->firstWhere('id', $telegramAccountId);
+        $pivot = $account?->relationLoaded('pivot') ? $account->getRelation('pivot') : null;
+
+        return $pivot instanceof Pivot
+            && $pivot->getAttribute('access_status') === TelegramSourceAccessStatus::Available->value;
+    }
+
+    public function collectorStatus(): string
+    {
+        if ($this->collector_telegram_account_id === null) {
+            return 'unavailable';
+        }
+
+        if ($this->preferred_collector_telegram_account_id === null) {
+            return 'automatic';
+        }
+
+        return $this->collector_telegram_account_id === $this->preferred_collector_telegram_account_id
+            ? 'preferred'
+            : 'fallback';
+    }
+
+    public function collectorLastError(): ?string
+    {
+        $targetAccountId = $this->preferred_collector_telegram_account_id
+            ?? $this->collector_telegram_account_id;
+
+        if ($targetAccountId !== null) {
+            return $this->accessErrorFor($targetAccountId);
+        }
+
+        return $this->telegramAccounts
+            ->map(fn (TelegramAccount $account): ?string => $this->accessErrorFor($account->id))
+            ->filter()
+            ->first();
+    }
+
+    public function shouldRetryPreferredCollectorSubscription(): bool
+    {
+        if (
+            blank($this->username)
+            || $this->preferred_collector_telegram_account_id === null
+            || $this->hasAvailableAccessFor($this->preferred_collector_telegram_account_id)
+        ) {
+            return false;
+        }
+
+        $account = $this->telegramAccounts->firstWhere(
+            'id',
+            $this->preferred_collector_telegram_account_id,
+        );
+        $pivot = $account?->relationLoaded('pivot') ? $account->getRelation('pivot') : null;
+        $lastCheckedAt = $pivot instanceof Pivot ? $pivot->getAttribute('last_checked_at') : null;
+
+        return blank($lastCheckedAt)
+            || Carbon::parse($lastCheckedAt)->lessThanOrEqualTo(now()->subMinutes(5));
+    }
+
     /** @return HasMany<SourcePost, $this> */
     public function posts(): HasMany
     {
@@ -136,5 +214,14 @@ class SourceChannel extends Model
             'last_backfilled_at' => 'datetime',
             'metadata' => 'array',
         ];
+    }
+
+    private function accessErrorFor(int $telegramAccountId): ?string
+    {
+        $account = $this->telegramAccounts->firstWhere('id', $telegramAccountId);
+        $pivot = $account?->relationLoaded('pivot') ? $account->getRelation('pivot') : null;
+        $error = $pivot instanceof Pivot ? $pivot->getAttribute('last_error') : null;
+
+        return is_string($error) && filled($error) ? $error : null;
     }
 }

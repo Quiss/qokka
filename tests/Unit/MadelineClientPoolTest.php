@@ -77,6 +77,8 @@ class MadelineClientPoolTest extends TestCase
             {
                 return [];
             }
+
+            public function joinChannel(int|string $channel): void {}
         };
     }
 

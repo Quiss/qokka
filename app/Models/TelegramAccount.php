@@ -5,6 +5,7 @@ namespace App\Models;
 use App\TelegramAccountStatus;
 use Database\Factories\TelegramAccountFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -63,6 +64,40 @@ class TelegramAccount extends Model
     public function isHeartbeatFresh(): bool
     {
         return $this->last_seen_at?->greaterThanOrEqualTo(now()->subMinutes(3)) ?? false;
+    }
+
+    public function isCollectorReady(): bool
+    {
+        if (! $this->is_active) {
+            return false;
+        }
+
+        return match ($this->status) {
+            TelegramAccountStatus::Connected => $this->isHeartbeatFresh(),
+            TelegramAccountStatus::Authorized => $this->last_seen_at === null,
+            default => false,
+        };
+    }
+
+    /**
+     * @param  Builder<TelegramAccount>  $query
+     * @return Builder<TelegramAccount>
+     */
+    public function scopeCollectorReady(Builder $query): Builder
+    {
+        return $query
+            ->where('is_active', true)
+            ->where(function (Builder $query): void {
+                $query
+                    ->where(function (Builder $query): void {
+                        $query->where('status', TelegramAccountStatus::Connected)
+                            ->where('last_seen_at', '>=', now()->subMinutes(3));
+                    })
+                    ->orWhere(function (Builder $query): void {
+                        $query->where('status', TelegramAccountStatus::Authorized)
+                            ->whereNull('last_seen_at');
+                    });
+            });
     }
 
     protected function casts(): array

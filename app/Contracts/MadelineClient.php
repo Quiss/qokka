@@ -20,4 +20,6 @@ interface MadelineClient
      * @return array<string, mixed>
      */
     public function getInfo(int|string $peer): array;
+
+    public function joinChannel(int|string $channel): void;
 }

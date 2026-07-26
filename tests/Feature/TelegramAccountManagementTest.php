@@ -47,7 +47,10 @@ class TelegramAccountManagementTest extends TestCase
             'last_seen_at' => now(),
         ]);
         SourceChannel::factory()->create(['collector_telegram_account_id' => $first->id]);
-        $source = SourceChannel::factory()->create(['collector_telegram_account_id' => null]);
+        $source = SourceChannel::factory()->create([
+            'username' => null,
+            'collector_telegram_account_id' => null,
+        ]);
         $source->telegramAccounts()->attach([
             $first->id => ['access_status' => TelegramSourceAccessStatus::Available],
             $second->id => ['access_status' => TelegramSourceAccessStatus::Available],
@@ -69,7 +72,10 @@ class TelegramAccountManagementTest extends TestCase
             'status' => TelegramAccountStatus::Connected,
             'last_seen_at' => now(),
         ]);
-        $source = SourceChannel::factory()->create(['collector_telegram_account_id' => $stale->id]);
+        $source = SourceChannel::factory()->create([
+            'username' => null,
+            'collector_telegram_account_id' => $stale->id,
+        ]);
         $source->telegramAccounts()->attach([
             $stale->id => ['access_status' => TelegramSourceAccessStatus::Available],
             $healthy->id => ['access_status' => TelegramSourceAccessStatus::Available],
