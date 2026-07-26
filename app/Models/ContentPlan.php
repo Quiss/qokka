@@ -21,13 +21,16 @@ use Illuminate\Support\Carbon;
  * @property int $candidate_target
  * @property Carbon|null $generated_at
  * @property Carbon|null $ai_reviewed_at
+ * @property Carbon|null $safety_net_started_at
+ * @property Carbon|null $safety_net_refreshed_at
+ * @property Carbon|null $safety_net_completed_at
  * @property int $story_candidates_count
  * @property int $planned_posts_count
  * @property-read Publication $publication
  * @property-read Collection<int, StoryCandidate> $storyCandidates
  * @property-read Collection<int, PlannedPost> $plannedPosts
  */
-#[Fillable(['publication_id', 'plan_date', 'status', 'slot_schedule', 'candidate_target', 'generated_at', 'ai_reviewed_at', 'ready_at', 'failure_reason', 'failed_at'])]
+#[Fillable(['publication_id', 'plan_date', 'status', 'slot_schedule', 'candidate_target', 'generated_at', 'ai_reviewed_at', 'ready_at', 'safety_net_started_at', 'safety_net_refreshed_at', 'safety_net_completed_at', 'failure_reason', 'failed_at'])]
 class ContentPlan extends Model
 {
     /** @use HasFactory<ContentPlanFactory> */
@@ -62,6 +65,9 @@ class ContentPlan extends Model
             'generated_at' => 'datetime',
             'ai_reviewed_at' => 'datetime',
             'ready_at' => 'datetime',
+            'safety_net_started_at' => 'datetime',
+            'safety_net_refreshed_at' => 'datetime',
+            'safety_net_completed_at' => 'datetime',
             'failed_at' => 'datetime',
         ];
     }

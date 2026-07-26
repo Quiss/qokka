@@ -21,7 +21,10 @@ class AdminWorkflowUiTest extends TestCase
         $this->get("/admin/content-plans/{$plan->id}/edit")->assertOk()->assertSee('Отбор новостей');
         $this->get('/admin/source-channels/create')->assertOk()->assertSee('Ссылка или username');
         $this->get('/admin/source-groups/create')->assertOk()->assertSee('Источники');
-        $this->get('/admin/publications/create')->assertOk()->assertSee('Тон для рерайта');
+        $this->get('/admin/publications/create')
+            ->assertOk()
+            ->assertSee('Редакционная инструкция для AI')
+            ->assertSee('Страховочная автопубликация');
         $this->get('/admin/telegram-accounts')->assertOk()->assertSee('Telegram-аккаунты');
         $this->get("/admin/telegram-accounts/{$telegramAccount->id}/edit")->assertOk()->assertSee('Последний heartbeat');
     }

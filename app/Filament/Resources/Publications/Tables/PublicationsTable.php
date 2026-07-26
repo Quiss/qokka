@@ -46,6 +46,13 @@ class PublicationsTable
                     ->label('Сбор плана')
                     ->time()
                     ->sortable(),
+                IconColumn::make('safety_net_enabled')
+                    ->label('Страховка')
+                    ->boolean(),
+                TextColumn::make('safety_net_cutoff_time')
+                    ->label('Дедлайн')
+                    ->time()
+                    ->sortable(),
                 IconColumn::make('is_active')
                     ->label('Активен')
                     ->boolean(),

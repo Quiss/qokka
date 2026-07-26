@@ -23,8 +23,45 @@ class ApprovePlannedPost
 
     public function approve(PlannedPost $plannedPost, User $user, ?string $overrideReason = null): PlannedPost
     {
+        return $this->approveWithActor($plannedPost, $user, $overrideReason);
+    }
+
+    public function approveAutomatically(PlannedPost $plannedPost): PlannedPost
+    {
+        $plannedPost->refresh();
+
+        if (in_array($plannedPost->status, [
+            PlannedPostStatus::Approved,
+            PlannedPostStatus::Publishing,
+            PlannedPostStatus::Published,
+        ], true)) {
+            return $plannedPost->load('deliveries');
+        }
+
+        if (! $this->canApproveAutomatically($plannedPost)) {
+            throw ValidationException::withMessages([
+                'risk_flags' => 'Автоматически можно одобрить только публикацию, прошедшую итоговую AI-проверку без рисков.',
+            ]);
+        }
+
+        $plannedPost->loadMissing('contentPlan.publication.destination');
+
+        if (! $plannedPost->contentPlan->publication->destination?->is_active) {
+            throw ValidationException::withMessages([
+                'destination' => 'Активный канал назначения не настроен.',
+            ]);
+        }
+
+        return $this->approveWithActor($plannedPost, null, null, true);
+    }
+
+    private function approveWithActor(
+        PlannedPost $plannedPost,
+        ?User $user,
+        ?string $overrideReason,
+        bool $isAutomatic = false,
+    ): PlannedPost {
         $plannedPost->loadMissing('contentPlan.publication.destination', 'contentPlan.plannedPosts');
-        $riskFlags = array_values(array_filter($plannedPost->risk_flags ?? []));
         $this->mediaManager->syncAvailableOrigins($plannedPost);
 
         if ($this->mediaManager->hasUnpreparedSelection($plannedPost)) {
@@ -45,46 +82,68 @@ class ApprovePlannedPost
             ]);
         }
 
-        return DB::transaction(function () use ($plannedPost, $user, $overrideReason, $riskFlags, $scheduledAt): PlannedPost {
-            $plannedPost->update([
+        return DB::transaction(function () use ($plannedPost, $user, $overrideReason, $scheduledAt, $isAutomatic): PlannedPost {
+            $lockedPost = PlannedPost::query()
+                ->with('contentPlan.publication.destination', 'contentPlan.plannedPosts')
+                ->lockForUpdate()
+                ->findOrFail($plannedPost->id);
+
+            if (in_array($lockedPost->status, [
+                PlannedPostStatus::Approved,
+                PlannedPostStatus::Publishing,
+                PlannedPostStatus::Published,
+            ], true)) {
+                return $lockedPost->load('deliveries');
+            }
+
+            if ($isAutomatic && ! $this->canApproveAutomatically($lockedPost)) {
+                throw ValidationException::withMessages([
+                    'risk_flags' => 'Публикация изменилась и больше не может быть одобрена автоматически.',
+                ]);
+            }
+
+            $lockedRiskFlags = array_values(array_filter($lockedPost->risk_flags ?? []));
+            $lockedPost->update([
                 'scheduled_at' => $scheduledAt,
                 'status' => PlannedPostStatus::Approved,
-                'approved_by' => $user->id,
+                'approved_by' => $user?->id,
                 'approved_at' => now(),
-                'override_by' => $riskFlags !== [] ? $user->id : null,
-                'override_reason' => $riskFlags !== [] ? $overrideReason : null,
+                'override_by' => ! $isAutomatic && $lockedRiskFlags !== [] ? $user?->id : null,
+                'override_reason' => ! $isAutomatic && $lockedRiskFlags !== [] ? $overrideReason : null,
             ]);
 
-            $destination = $plannedPost->contentPlan->publication->destination;
+            $destination = $lockedPost->contentPlan->publication->destination;
 
             if ($destination?->is_active) {
-                $plannedPost->deliveries()->updateOrCreate(
+                $lockedPost->deliveries()->updateOrCreate(
                     ['destination_id' => $destination->id],
                     ['status' => DeliveryStatus::Pending, 'next_attempt_at' => $scheduledAt],
                 );
             }
 
             ModerationAction::create([
-                'user_id' => $user->id,
-                'subject_type' => $plannedPost::class,
-                'subject_id' => $plannedPost->id,
-                'action' => $riskFlags !== [] ? ModerationActionType::OverrideAiBlock : ModerationActionType::ApprovePost,
+                'user_id' => $user?->id,
+                'subject_type' => $lockedPost::class,
+                'subject_id' => $lockedPost->id,
+                'action' => $isAutomatic
+                    ? ModerationActionType::SafetyNetApprovePost
+                    : ($lockedRiskFlags !== [] ? ModerationActionType::OverrideAiBlock : ModerationActionType::ApprovePost),
                 'reason' => $overrideReason,
-                'metadata' => ['risk_flags' => $riskFlags],
+                'metadata' => ['risk_flags' => $lockedRiskFlags, 'automatic' => $isAutomatic],
             ]);
 
-            $activePosts = $plannedPost->contentPlan->plannedPosts()
+            $activePosts = $lockedPost->contentPlan->plannedPosts()
                 ->where('status', '!=', PlannedPostStatus::Cancelled);
-            $hasAllSlots = (clone $activePosts)->count() >= count($plannedPost->contentPlan->slot_schedule ?? []);
+            $hasAllSlots = (clone $activePosts)->count() >= count($lockedPost->contentPlan->slot_schedule ?? []);
             $hasIncompletePosts = (clone $activePosts)
                 ->whereNotIn('status', [PlannedPostStatus::Approved, PlannedPostStatus::Publishing, PlannedPostStatus::Published])
                 ->exists();
 
             if ($hasAllSlots && ! $hasIncompletePosts) {
-                $plannedPost->contentPlan->update(['status' => ContentPlanStatus::Ready, 'ready_at' => now()]);
+                $lockedPost->contentPlan->update(['status' => ContentPlanStatus::Ready, 'ready_at' => now()]);
             }
 
-            return $plannedPost->fresh(['deliveries']);
+            return $lockedPost->fresh(['deliveries']);
         });
     }
 
@@ -112,5 +171,15 @@ class ApprovePlannedPost
         return collect($plannedPost->contentPlan->slot_schedule ?? [])
             ->map(fn (string $slot): CarbonImmutable => CarbonImmutable::parse($slot))
             ->first(fn (CarbonImmutable $slot): bool => $slot->isFuture() && ! $occupied->contains($slot->toIso8601String()));
+    }
+
+    private function canApproveAutomatically(PlannedPost $plannedPost): bool
+    {
+        return in_array($plannedPost->status, [
+            PlannedPostStatus::FinalReview,
+            PlannedPostStatus::NeedsReschedule,
+        ], true)
+            && $plannedPost->ai_review_status === 'passed'
+            && array_values(array_filter($plannedPost->risk_flags ?? [])) === [];
     }
 }

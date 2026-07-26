@@ -30,6 +30,8 @@ class PublicationFactory extends Factory
             'selection_prompt' => null,
             'content_filters' => [],
             'planning_time' => '18:00',
+            'safety_net_enabled' => true,
+            'safety_net_cutoff_time' => '00:00',
             'publish_window_start' => '09:00',
             'publish_window_end' => '23:00',
             'min_interval_minutes' => 90,

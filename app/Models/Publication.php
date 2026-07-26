@@ -28,6 +28,8 @@ use Illuminate\Support\Str;
  * @property string|null $analysis_model
  * @property string|null $rewrite_model
  * @property string $planning_time
+ * @property bool $safety_net_enabled
+ * @property string $safety_net_cutoff_time
  * @property string $publish_window_start
  * @property string $publish_window_end
  * @property int $min_interval_minutes
@@ -42,7 +44,7 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, Destination> $destinations
  * @property-read Destination|null $destination
  */
-#[Fillable(['source_group_id', 'name', 'slug', 'language', 'timezone', 'tone_prompt', 'selection_prompt', 'tone_examples', 'forbidden_phrases', 'content_filters', 'analysis_model', 'rewrite_model', 'planning_time', 'publish_window_start', 'publish_window_end', 'min_interval_minutes', 'max_interval_minutes', 'reserve_multiplier', 'media_caption_limit', 'show_source_attribution', 'signature_mode', 'signature_label', 'is_active'])]
+#[Fillable(['source_group_id', 'name', 'slug', 'language', 'timezone', 'tone_prompt', 'selection_prompt', 'tone_examples', 'forbidden_phrases', 'content_filters', 'analysis_model', 'rewrite_model', 'planning_time', 'safety_net_enabled', 'safety_net_cutoff_time', 'publish_window_start', 'publish_window_end', 'min_interval_minutes', 'max_interval_minutes', 'reserve_multiplier', 'media_caption_limit', 'show_source_attribution', 'signature_mode', 'signature_label', 'is_active'])]
 class Publication extends Model
 {
     /** @use HasFactory<PublicationFactory> */
@@ -52,6 +54,8 @@ class Publication extends Model
         'language' => 'ru',
         'timezone' => 'Europe/Moscow',
         'planning_time' => '18:00',
+        'safety_net_enabled' => true,
+        'safety_net_cutoff_time' => '00:00',
         'publish_window_start' => '09:00',
         'publish_window_end' => '23:00',
         'min_interval_minutes' => 90,
@@ -120,6 +124,7 @@ class Publication extends Model
             'forbidden_phrases' => 'array',
             'content_filters' => 'array',
             'reserve_multiplier' => 'decimal:2',
+            'safety_net_enabled' => 'boolean',
             'show_source_attribution' => 'boolean',
             'signature_mode' => PublicationSignatureMode::class,
             'is_active' => 'boolean',

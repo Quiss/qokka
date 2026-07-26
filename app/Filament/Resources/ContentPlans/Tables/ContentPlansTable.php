@@ -67,6 +67,13 @@ class ContentPlansTable
                             ->placeholder('Подборка ещё не собрана')
                             ->color('gray')
                             ->sortable(),
+                        TextColumn::make('safety_net_started_at')
+                            ->label('Страховочная автопубликация')
+                            ->dateTime('d.m.Y H:i')
+                            ->prefix('Страховка: ')
+                            ->placeholder('Ручной режим')
+                            ->color('warning')
+                            ->sortable(),
                         TextColumn::make('failure_reason')
                             ->label('Ошибка')
                             ->limit(70)
@@ -155,6 +162,7 @@ class ContentPlansTable
             'ready' => 'Готов к публикации',
             'active' => 'Публикуется',
             'completed' => 'Завершён',
+            'skipped' => 'Пропущен: нет безопасных новостей',
             'failed' => 'Ошибка',
             default => (string) ($state->value ?? $state),
         };

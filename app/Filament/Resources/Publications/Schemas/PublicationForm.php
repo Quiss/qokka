@@ -132,6 +132,26 @@ class PublicationForm
                             ->maxValue(3)
                             ->default(1.5),
                     ]),
+                Section::make('Страховочная автопубликация')
+                    ->description('Если редактор не завершил план вовремя, система сама подготовит и одобрит только новости без рисков.')
+                    ->columns(2)
+                    ->schema([
+                        Toggle::make('safety_net_enabled')
+                            ->label('Автоматически подхватывать пропущенный план')
+                            ->helperText('Уже одобренные доставки не отменяются при выключении этой настройки.')
+                            ->default(true)
+                            ->live(),
+                        TimePicker::make('safety_net_cutoff_time')
+                            ->label('Дедлайн редактора')
+                            ->helperText('В часовом поясе канала. Должен наступать не позже первой публикации.')
+                            ->default('00:00')
+                            ->beforeOrEqual('publish_window_start')
+                            ->required(),
+                        Placeholder::make('safety_net_policy')
+                            ->label('Политика безопасности')
+                            ->content('Автоматика использует только кандидатов без AI-флагов и публикует текст только после итоговой AI-проверки без рисков. Блокировки никогда не переопределяются автоматически.')
+                            ->columnSpanFull(),
+                    ]),
                 Section::make('Расширенные настройки')
                     ->description('Обычно эти значения можно не менять.')
                     ->collapsed()

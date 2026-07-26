@@ -25,6 +25,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
         public readonly int $contentPlanId,
         public readonly int $candidateTarget,
         public readonly ContentPlanStatus $completionStatus = ContentPlanStatus::NeedsCandidates,
+        public readonly bool $extendLookback = true,
     ) {}
 
     public function uniqueId(): string
@@ -39,7 +40,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
         $generateCandidateBatch->handle($plan, append: true, lookbackHours: 24, targetOverride: $this->candidateTarget);
         $created = $plan->storyCandidates()->count() - $before;
 
-        if ($created < $this->candidateTarget) {
+        if ($this->extendLookback && $created < $this->candidateTarget) {
             $generateCandidateBatch->handle(
                 $plan->fresh(),
                 append: true,

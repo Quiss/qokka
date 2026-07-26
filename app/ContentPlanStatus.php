@@ -12,5 +12,6 @@ enum ContentPlanStatus: string
     case Ready = 'ready';
     case Active = 'active';
     case Completed = 'completed';
+    case Skipped = 'skipped';
     case Failed = 'failed';
 }

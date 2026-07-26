@@ -10,6 +10,7 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('content-plans:generate-due')->everyMinute()->withoutOverlapping()->onOneServer();
+Schedule::command('content-plans:run-safety-net')->everyMinute()->withoutOverlapping()->onOneServer();
 Schedule::command('telegram:accounts:reconcile')->everyMinute()->withoutOverlapping()->onOneServer();
 Schedule::command('telegram:sources:sync-statistics')->hourly()->withoutOverlapping()->onOneServer();
 Schedule::command('source-posts:prune')->dailyAt('03:30')->withoutOverlapping()->onOneServer();
