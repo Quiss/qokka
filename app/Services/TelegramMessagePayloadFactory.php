@@ -83,14 +83,14 @@ class TelegramMessagePayloadFactory
             $photoSizes = is_array($photo['sizes'] ?? null) ? $photo['sizes'] : [];
             $largest = collect($photoSizes)
                 ->filter(fn (mixed $size): bool => is_array($size))
-                ->sortByDesc(fn (array $size): int => (int) ($size['size'] ?? 0))
+                ->sortByDesc(fn (array $size): int => (int) ($size['w'] ?? 0) * (int) ($size['h'] ?? 0))
                 ->first();
 
             return [[
                 'type' => 'photo',
                 'external_id' => 'photo:'.($photo['id'] ?? $message['id']),
                 'mime_type' => 'image/jpeg',
-                'size_bytes' => is_array($largest) ? ($largest['size'] ?? null) : null,
+                'size_bytes' => is_array($largest) ? $this->photoSizeBytes($largest) : null,
                 'metadata' => [
                     'telegram_media_type' => 'photo',
                     'file_name' => 'photo.jpg',
@@ -133,5 +133,27 @@ class TelegramMessagePayloadFactory
                 'supports_streaming' => is_array($videoAttribute) ? ($videoAttribute['supports_streaming'] ?? null) : null,
             ], fn (mixed $value): bool => $value !== null),
         ]];
+    }
+
+    /** @param array<string, mixed> $photoSize */
+    private function photoSizeBytes(array $photoSize): ?int
+    {
+        if (isset($photoSize['size'])) {
+            return (int) $photoSize['size'];
+        }
+
+        $progressiveSize = collect(is_array($photoSize['sizes'] ?? null) ? $photoSize['sizes'] : [])
+            ->filter(fn (mixed $size): bool => is_int($size))
+            ->last();
+
+        if (is_int($progressiveSize)) {
+            return $progressiveSize;
+        }
+
+        if (is_string($photoSize['bytes'] ?? null)) {
+            return strlen($photoSize['bytes']);
+        }
+
+        return null;
     }
 }

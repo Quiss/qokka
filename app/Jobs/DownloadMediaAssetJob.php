@@ -98,7 +98,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 $this->downloadReference($origin, $freshMessage),
                 $temporaryPath,
             );
-            $this->assertDownloadedFileIsComplete($origin, $temporaryPath);
+            $downloadedSize = $this->assertDownloadedFileIsComplete($origin, $temporaryPath);
 
             if (! File::move($temporaryPath, $absolutePath)) {
                 throw new RuntimeException('Не удалось переместить загруженное медиа из временного файла.');
@@ -109,7 +109,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 [$this->previewOnly ? 'preview_download_error' : 'download_error'],
             );
 
-            DB::transaction(function () use ($origin, $relativePath, $absolutePath, $metadata): void {
+            DB::transaction(function () use ($origin, $relativePath, $absolutePath, $downloadedSize, $metadata): void {
                 if ($this->previewOnly) {
                     $origin->update([
                         'preview_disk' => 'local',
@@ -123,6 +123,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                     $origin->update([
                         'disk' => 'local',
                         'path' => $relativePath,
+                        'size_bytes' => $downloadedSize,
                         'checksum' => hash_file('sha256', $absolutePath),
                         'downloaded_at' => now(),
                         'failed_at' => null,
@@ -237,7 +238,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         };
     }
 
-    private function assertDownloadedFileIsComplete(MediaAsset $asset, string $path): void
+    private function assertDownloadedFileIsComplete(MediaAsset $asset, string $path): int
     {
         $actualSize = File::size($path);
 
@@ -245,11 +246,17 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             throw new RuntimeException('Telegram вернул пустой файл.');
         }
 
-        if (! $this->previewOnly && ($asset->size_bytes ?? 0) > 0 && $actualSize !== $asset->size_bytes) {
+        if (! $this->previewOnly && ($asset->size_bytes ?? 0) > 0 && $actualSize < $asset->size_bytes) {
             throw new RuntimeException(
                 "Telegram загрузил файл не полностью: ожидалось {$asset->size_bytes} байт, получено {$actualSize}.",
             );
         }
+
+        if (! $this->previewOnly && $actualSize > (int) config('services.telegram.media_max_bytes')) {
+            throw new RuntimeException('Медиа превышает лимит Telegram 50 МБ.');
+        }
+
+        return $actualSize;
     }
 
     /** @param list<string> $paths */
@@ -282,6 +289,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 'preview_disk' => $origin->preview_disk,
                 'preview_path' => $origin->preview_path,
                 'preview_mime_type' => $origin->preview_mime_type,
+                'size_bytes' => $origin->size_bytes,
                 'checksum' => $origin->checksum,
                 'downloaded_at' => $origin->downloaded_at,
                 'preview_downloaded_at' => $origin->preview_downloaded_at,

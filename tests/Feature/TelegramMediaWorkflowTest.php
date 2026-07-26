@@ -46,7 +46,14 @@ class TelegramMediaWorkflowTest extends TestCase
                 'photo' => [
                     'id' => 100,
                     'sizes' => [
-                        ['_' => 'photoSize', 'type' => 'm', 'size' => 120_000],
+                        ['_' => 'photoSize', 'type' => 'm', 'w' => 800, 'h' => 600, 'size' => 197_205],
+                        [
+                            '_' => 'photoSizeProgressive',
+                            'type' => 'x',
+                            'w' => 1600,
+                            'h' => 1200,
+                            'sizes' => [42_000, 197_205, 332_141],
+                        ],
                     ],
                 ],
             ],
@@ -74,6 +81,7 @@ class TelegramMediaWorkflowTest extends TestCase
 
         $this->assertSame('photo', $photoPayload['media'][0]['type']);
         $this->assertSame('photo:100', $photoPayload['media'][0]['external_id']);
+        $this->assertSame(332_141, $photoPayload['media'][0]['size_bytes']);
         $this->assertSame('video', $videoPayload['media'][0]['type']);
         $this->assertSame('m', $videoPayload['media'][0]['metadata']['thumbnail_type']);
         $this->assertSame(1080, $videoPayload['media'][0]['metadata']['width']);
@@ -395,6 +403,138 @@ class TelegramMediaWorkflowTest extends TestCase
             $this->fail('The Telegram CDN failure should be propagated for a queued retry.');
         } catch (\RuntimeException $exception) {
             $this->assertSame('VOLUME_LOC_NOT_FOUND', $exception->getMessage());
+        }
+
+        $this->assertNull($asset->fresh()->path);
+        $this->assertSame([], Storage::disk('local')->allFiles('telegram/tmp'));
+        $this->assertSame([], Storage::disk('local')->allFiles('telegram/media'));
+    }
+
+    public function test_download_job_accepts_a_complete_photo_larger_than_its_stale_stored_size(): void
+    {
+        Storage::fake('local');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Фото',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Photo,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'size_bytes' => 197_205,
+            'mime_type' => 'image/jpeg',
+        ]);
+        $plannedPost = PlannedPost::factory()->create();
+        $selectedAsset = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'origin_media_asset_id' => $asset->id,
+            'type' => MediaType::Photo,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'size_bytes' => 197_205,
+            'mime_type' => 'image/jpeg',
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturn([
+                '_' => 'message',
+                'id' => 100,
+                'media' => ['_' => 'messageMediaPhoto'],
+            ]);
+        $client->shouldReceive('downloadToFile')
+            ->once()
+            ->andReturnUsing(function (mixed $media, string $path): string {
+                File::put($path, str_repeat('x', 332_141));
+
+                return $path;
+            });
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+
+        (new DownloadMediaAssetJob($asset->id))->handle($pool);
+
+        $asset->refresh();
+        $selectedAsset->refresh();
+        $this->assertSame(332_141, $asset->size_bytes);
+        $this->assertNotNull($asset->path);
+        $this->assertSame(332_141, Storage::disk('local')->size($asset->path));
+        $this->assertSame(332_141, $selectedAsset->size_bytes);
+        $this->assertSame($asset->path, $selectedAsset->path);
+    }
+
+    public function test_download_job_rejects_a_file_smaller_than_its_stored_size(): void
+    {
+        Storage::fake('local');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Фото',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Photo,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'size_bytes' => 20,
+            'mime_type' => 'image/jpeg',
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturn([
+                '_' => 'message',
+                'id' => 100,
+                'media' => ['_' => 'messageMediaPhoto'],
+            ]);
+        $client->shouldReceive('downloadToFile')
+            ->once()
+            ->andReturnUsing(function (mixed $media, string $path): string {
+                File::put($path, 'partial');
+
+                return $path;
+            });
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+
+        try {
+            (new DownloadMediaAssetJob($asset->id))->handle($pool);
+            $this->fail('An incomplete Telegram file should be rejected.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(
+                'Telegram загрузил файл не полностью: ожидалось 20 байт, получено 7.',
+                $exception->getMessage(),
+            );
         }
 
         $this->assertNull($asset->fresh()->path);
