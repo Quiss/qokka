@@ -402,6 +402,88 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame([], Storage::disk('local')->allFiles('telegram/media'));
     }
 
+    public function test_download_job_ignores_missing_madeline_lock_during_cleanup(): void
+    {
+        Storage::fake('local');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Фото',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'size_bytes' => strlen('downloaded'),
+            'metadata' => ['bot_api_file_id' => 'first-file'],
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturn([
+                '_' => 'message',
+                'id' => 100,
+                'media' => ['_' => 'messageMediaPhoto'],
+            ]);
+        $client->shouldReceive('downloadToFile')
+            ->once()
+            ->andReturnUsing(function (mixed $media, string $path): string {
+                File::put($path, 'downloaded');
+
+                return $path;
+            });
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+        set_error_handler(
+            static function (int $level, string $message): never {
+                throw new \RuntimeException($message, $level);
+            },
+        );
+
+        try {
+            (new DownloadMediaAssetJob($asset->id))->handle($pool);
+        } finally {
+            restore_error_handler();
+        }
+
+        $asset->refresh();
+        $this->assertNotNull($asset->path);
+        $this->assertNull($asset->failed_at);
+        Storage::disk('local')->assertExists($asset->path);
+    }
+
+    public function test_failed_callback_does_not_reject_an_already_downloaded_asset(): void
+    {
+        $sourcePost = SourcePost::factory()->create();
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'path' => 'telegram/media/downloaded.jpg',
+            'downloaded_at' => now(),
+            'failed_at' => null,
+        ]);
+
+        (new DownloadMediaAssetJob($asset->id))->failed(
+            new \RuntimeException('Temporary lock cleanup failed.'),
+        );
+
+        $asset->refresh();
+        $this->assertNull($asset->failed_at);
+        $this->assertArrayNotHasKey('download_error', $asset->metadata ?? []);
+    }
+
     public function test_existing_video_file_is_synced_to_planned_post_without_additional_processing(): void
     {
         Storage::fake('local');

@@ -133,12 +133,12 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 $this->syncClones($origin->fresh());
             });
         } catch (Throwable $exception) {
-            File::delete($absolutePath);
+            $this->deleteFilesWithoutFailingJob([$absolutePath]);
             $clientPool->forget($account);
 
             throw $exception;
         } finally {
-            File::delete([$temporaryPath, $temporaryPath.'.lock']);
+            $this->deleteFilesWithoutFailingJob([$temporaryPath, $temporaryPath.'.lock']);
         }
     }
 
@@ -148,6 +148,15 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         $origin = $asset->originMediaAsset ?? $asset;
 
         if ($origin === null) {
+            return;
+        }
+
+        if (
+            ($this->previewOnly && filled($origin->preview_path))
+            || (! $this->previewOnly && filled($origin->path))
+        ) {
+            $this->syncClones($origin);
+
             return;
         }
 
@@ -240,6 +249,26 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             throw new RuntimeException(
                 "Telegram загрузил файл не полностью: ожидалось {$asset->size_bytes} байт, получено {$actualSize}.",
             );
+        }
+    }
+
+    /** @param list<string> $paths */
+    private function deleteFilesWithoutFailingJob(array $paths): void
+    {
+        foreach ($paths as $path) {
+            if (! File::exists($path)) {
+                continue;
+            }
+
+            try {
+                File::delete($path);
+            } catch (Throwable $exception) {
+                Log::warning('Telegram media temporary file cleanup failed.', [
+                    'media_asset_id' => $this->mediaAssetId,
+                    'path' => $path,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
         }
     }
 

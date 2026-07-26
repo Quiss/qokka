@@ -35,22 +35,75 @@ class ContentPlanSafetyNetTest extends TestCase
             'safety_net_cutoff_time' => '10:00',
             'publish_window_end' => '23:00',
         ]);
+        $contentPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-26',
+            'status' => ContentPlanStatus::Generating,
+        ]);
         $this->travelTo(CarbonImmutable::parse('2026-07-26 06:59:00', 'UTC'));
 
         $this->artisan('content-plans:run-safety-net')->assertSuccessful();
 
-        $this->assertFalse($publication->contentPlans()->exists());
+        $this->assertNull($contentPlan->fresh()->safety_net_started_at);
         Queue::assertNothingPushed();
 
         $this->travelTo(CarbonImmutable::parse('2026-07-26 07:00:00', 'UTC'));
 
         $this->artisan('content-plans:run-safety-net')->assertSuccessful();
 
+        $this->assertNotNull($contentPlan->fresh()->safety_net_started_at);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_command_does_not_create_a_current_day_plan_when_none_was_scheduled(): void
+    {
+        Queue::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-26 00:10:00', 'Europe/Moscow'));
+        $publication = Publication::factory()->create();
+
+        $this->artisan('content-plans:run-safety-net')->assertSuccessful();
+
+        $this->assertFalse($publication->contentPlans()->exists());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_command_does_not_generate_an_existing_blank_plan(): void
+    {
+        Queue::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-26 00:10:00', 'Europe/Moscow'));
+        $publication = Publication::factory()->create();
+        $contentPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-26',
+            'status' => ContentPlanStatus::CandidateReview,
+            'generated_at' => null,
+        ]);
+
+        $this->artisan('content-plans:run-safety-net')->assertSuccessful();
+
+        $this->assertSame(ContentPlanStatus::CandidateReview, $contentPlan->fresh()->status);
+        $this->assertNotNull($contentPlan->fresh()->safety_net_started_at);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_new_publication_only_receives_tomorrow_plan_from_scheduled_generation(): void
+    {
+        Queue::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-26 20:00:00', 'Europe/Moscow'));
+        $publication = Publication::factory()->create([
+            'planning_time' => '19:30',
+        ]);
+
+        $this->artisan('content-plans:generate-due')->assertSuccessful();
+        $this->artisan('content-plans:run-safety-net')->assertSuccessful();
+
         $contentPlan = $publication->contentPlans()->sole();
-        $this->assertSame('2026-07-26', $contentPlan->plan_date->toDateString());
-        $this->assertSame(ContentPlanStatus::Generating, $contentPlan->status);
-        $this->assertNotNull($contentPlan->safety_net_started_at);
-        Queue::assertPushed(GenerateCandidateBatchJob::class, 1);
+        $this->assertSame('2026-07-27', $contentPlan->plan_date->toDateString());
+        $this->assertNull($contentPlan->safety_net_started_at);
+        Queue::assertPushed(
+            GenerateCandidateBatchJob::class,
+            fn (GenerateCandidateBatchJob $job): bool => $job->contentPlanId === $contentPlan->id,
+        );
     }
 
     public function test_command_ignores_publications_with_the_safety_net_disabled(): void

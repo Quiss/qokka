@@ -13,7 +13,6 @@ use Illuminate\Support\Facades\DB;
 class AdvanceContentPlanSafetyNet
 {
     public function __construct(
-        private readonly QueueContentPlanGeneration $queueContentPlanGeneration,
         private readonly PopulateContentPlanSafetyNet $populateContentPlan,
         private readonly FinalizeContentPlanSafetyNet $finalizeContentPlan,
     ) {}
@@ -30,10 +29,14 @@ class AdvanceContentPlanSafetyNet
             return false;
         }
 
-        $contentPlan = ContentPlan::query()->firstOrCreate([
-            'publication_id' => $publication->id,
-            'plan_date' => $localNow->toDateString(),
-        ]);
+        $contentPlan = ContentPlan::query()
+            ->whereBelongsTo($publication)
+            ->where('plan_date', $localNow->toDateString())
+            ->first();
+
+        if ($contentPlan === null) {
+            return false;
+        }
 
         if (! $this->start($contentPlan)) {
             return false;
@@ -54,7 +57,7 @@ class AdvanceContentPlanSafetyNet
         $contentPlan->refresh();
 
         if ($contentPlan->generated_at === null && $contentPlan->plannedPosts()->doesntExist()) {
-            return $this->queueContentPlanGeneration->handle($contentPlan);
+            return false;
         }
 
         if (in_array($contentPlan->status, [
