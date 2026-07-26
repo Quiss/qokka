@@ -5,9 +5,11 @@ namespace App\Actions;
 use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
+use App\Filament\Resources\ContentPlans\ContentPlanResource;
 use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\SourcePost;
+use App\OperationsNotificationTopic;
 use App\Services\ContentPlanSlotGenerator;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -20,6 +22,7 @@ class GenerateCandidateBatch
     public function __construct(
         private readonly ContentIntelligence $contentIntelligence,
         private readonly ContentPlanSlotGenerator $slotGenerator,
+        private readonly QueueOperationsNotification $queueOperationsNotification,
     ) {}
 
     public function handle(
@@ -100,7 +103,10 @@ class GenerateCandidateBatch
                 ]);
             });
 
-            return $contentPlan->fresh();
+            $freshContentPlan = $contentPlan->fresh();
+            $this->notifyInitialGeneration($freshContentPlan, $append);
+
+            return $freshContentPlan;
         }
 
         $result = $this->contentIntelligence->rankAndCluster($contentPlan, $posts);
@@ -159,7 +165,32 @@ class GenerateCandidateBatch
             ]);
         });
 
-        return $contentPlan->fresh(['storyCandidates.sourcePosts']);
+        $freshContentPlan = $contentPlan->fresh(['storyCandidates.sourcePosts']);
+        $this->notifyInitialGeneration($freshContentPlan, $append);
+
+        return $freshContentPlan;
+    }
+
+    private function notifyInitialGeneration(ContentPlan $contentPlan, bool $append): void
+    {
+        if ($append) {
+            return;
+        }
+
+        $contentPlan->loadMissing('publication');
+        $this->queueOperationsNotification->handle(
+            OperationsNotificationTopic::ContentPlans,
+            "Собран новый контент-план для «{$contentPlan->publication->name}»",
+            [
+                'Дата: '.$contentPlan->plan_date->format('d.m.Y'),
+                'Кандидатов: '.$contentPlan->storyCandidates()->count(),
+            ],
+            ContentPlanResource::getUrl(
+                'edit',
+                ['record' => $contentPlan],
+                panel: 'admin',
+            ),
+        );
     }
 
     private function primarySourceScore(?SourcePost $sourcePost): float

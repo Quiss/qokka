@@ -51,6 +51,15 @@ return [
         'bot_api_timeout' => (int) env('TELEGRAM_BOT_API_TIMEOUT', 300),
         'bot_api_connect_timeout' => (int) env('TELEGRAM_BOT_API_CONNECT_TIMEOUT', 10),
         'publishing_stale_after' => (int) env('TELEGRAM_PUBLISHING_STALE_AFTER', 600),
+        'operations' => [
+            'chat_id' => env('TELEGRAM_OPERATIONS_CHAT_ID'),
+            'topics' => [
+                'content_plans' => (int) env('TELEGRAM_OPERATIONS_CONTENT_PLANS_TOPIC_ID', 4),
+                'failures' => (int) env('TELEGRAM_OPERATIONS_FAILURES_TOPIC_ID', 5),
+            ],
+            'timeout' => (int) env('TELEGRAM_OPERATIONS_TIMEOUT', 10),
+            'connect_timeout' => (int) env('TELEGRAM_OPERATIONS_CONNECT_TIMEOUT', 3),
+        ],
         'api_id' => env('TELEGRAM_API_ID'),
         'api_hash' => env('TELEGRAM_API_HASH'),
         'bridge_secret' => env('TELEGRAM_BRIDGE_SECRET'),

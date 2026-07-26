@@ -3,9 +3,12 @@
 namespace App\Jobs;
 
 use App\Actions\CompleteDeliveryPublication;
+use App\Actions\QueueOperationsNotification;
 use App\ContentPlanStatus;
 use App\DeliveryStatus;
+use App\Filament\Resources\Deliveries\DeliveryResource;
 use App\Models\Delivery;
+use App\OperationsNotificationTopic;
 use App\Services\TelegramPublisher;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -33,6 +36,7 @@ class PublishDeliveryJob implements ShouldQueue
     public function handle(
         TelegramPublisher $publisher,
         CompleteDeliveryPublication $completeDeliveryPublication,
+        QueueOperationsNotification $queueOperationsNotification,
     ): void {
         $delivery = DB::transaction(function (): ?Delivery {
             $delivery = Delivery::query()->lockForUpdate()->find($this->deliveryId);
@@ -64,6 +68,7 @@ class PublishDeliveryJob implements ShouldQueue
                 'is_ambiguous' => true,
                 'error_context' => ['reason' => 'connection_lost_during_publish'],
             ]);
+            $this->notifyTerminalFailure($queueOperationsNotification, $delivery, $exception);
 
             return;
         } catch (Throwable $exception) {
@@ -78,6 +83,10 @@ class PublishDeliveryJob implements ShouldQueue
                 'last_error' => $exception->getMessage(),
                 'error_context' => $exception instanceof RequestException ? ['status' => $exception->response->status()] : null,
             ]);
+
+            if (! $shouldRetry) {
+                $this->notifyTerminalFailure($queueOperationsNotification, $delivery, $exception);
+            }
 
             return;
         }
@@ -94,7 +103,27 @@ class PublishDeliveryJob implements ShouldQueue
                 'is_ambiguous' => true,
                 'error_context' => ['reason' => 'state_update_failed_after_publish'],
             ]);
+            $this->notifyTerminalFailure($queueOperationsNotification, $delivery, $exception);
         }
+    }
+
+    private function notifyTerminalFailure(
+        QueueOperationsNotification $queueOperationsNotification,
+        Delivery $delivery,
+        Throwable $exception,
+    ): void {
+        $delivery->loadMissing('plannedPost.contentPlan.publication');
+        $publication = $delivery->plannedPost->contentPlan->publication;
+
+        $queueOperationsNotification->handle(
+            OperationsNotificationTopic::Failures,
+            "Терминальный сбой публикации для «{$publication->name}»",
+            [
+                'Delivery: #'.$delivery->id,
+                'Ошибка: '.$exception->getMessage(),
+            ],
+            DeliveryResource::getUrl('index', panel: 'admin'),
+        );
     }
 
     /**

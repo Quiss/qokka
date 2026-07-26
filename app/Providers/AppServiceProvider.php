@@ -3,9 +3,11 @@
 namespace App\Providers;
 
 use App\Contracts\ContentIntelligence;
+use App\Contracts\OperationsNotifier;
 use App\Contracts\Publisher;
 use App\Services\MadelineClientPool;
 use App\Services\OpenRouterContentIntelligence;
+use App\Services\TelegramOperationsNotifier;
 use App\Services\TelegramPublisher;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
@@ -21,6 +23,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(ContentIntelligence::class, OpenRouterContentIntelligence::class);
+        $this->app->bind(OperationsNotifier::class, TelegramOperationsNotifier::class);
         $this->app->bind(Publisher::class, TelegramPublisher::class);
         $this->app->singleton(MadelineClientPool::class);
     }

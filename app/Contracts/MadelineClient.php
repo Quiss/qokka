@@ -21,5 +21,16 @@ interface MadelineClient
      */
     public function getInfo(int|string $peer): array;
 
+    public function canBanChannelParticipants(int|string $channel): bool;
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getChannelParticipants(int|string $channel, int $offset, int $limit): array;
+
+    public function banChannelParticipant(int|string $channel, int $participantId): void;
+
+    public function unbanChannelParticipant(int|string $channel, int $participantId): void;
+
     public function joinChannel(int|string $channel): void;
 }

@@ -3,9 +3,11 @@
 namespace App\Actions;
 
 use App\ContentPlanStatus;
+use App\Filament\Resources\ContentPlans\ContentPlanResource;
 use App\Jobs\ReplenishContentPlanCandidatesJob;
 use App\Models\ContentPlan;
 use App\Models\Publication;
+use App\OperationsNotificationTopic;
 use App\PlannedPostStatus;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +17,7 @@ class AdvanceContentPlanSafetyNet
     public function __construct(
         private readonly PopulateContentPlanSafetyNet $populateContentPlan,
         private readonly FinalizeContentPlanSafetyNet $finalizeContentPlan,
+        private readonly QueueOperationsNotification $queueOperationsNotification,
     ) {}
 
     public function handle(Publication $publication): bool
@@ -38,8 +41,23 @@ class AdvanceContentPlanSafetyNet
             return false;
         }
 
-        if (! $this->start($contentPlan)) {
+        $startResult = $this->start($contentPlan);
+
+        if (! $startResult['may_advance']) {
             return false;
+        }
+
+        if ($startResult['started']) {
+            $this->queueOperationsNotification->handle(
+                OperationsNotificationTopic::ContentPlans,
+                "План для «{$publication->name}» передан на автоматическую модерацию",
+                ['Дата: '.$contentPlan->plan_date->format('d.m.Y')],
+                ContentPlanResource::getUrl(
+                    'edit',
+                    ['record' => $contentPlan],
+                    panel: 'admin',
+                ),
+            );
         }
 
         $windowEnd = CarbonImmutable::parse(
@@ -99,22 +117,25 @@ class AdvanceContentPlanSafetyNet
         return true;
     }
 
-    private function start(ContentPlan $contentPlan): bool
+    /** @return array{may_advance: bool, started: bool} */
+    private function start(ContentPlan $contentPlan): array
     {
-        return DB::transaction(function () use ($contentPlan): bool {
+        return DB::transaction(function () use ($contentPlan): array {
             $lockedPlan = ContentPlan::query()
                 ->lockForUpdate()
                 ->findOrFail($contentPlan->id);
 
             if ($this->isTerminal($lockedPlan)) {
-                return false;
+                return ['may_advance' => false, 'started' => false];
             }
 
-            if ($lockedPlan->safety_net_started_at === null) {
+            $started = $lockedPlan->safety_net_started_at === null;
+
+            if ($started) {
                 $lockedPlan->update(['safety_net_started_at' => now()]);
             }
 
-            return true;
+            return ['may_advance' => true, 'started' => $started];
         });
     }
 

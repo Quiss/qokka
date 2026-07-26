@@ -78,6 +78,20 @@ class MadelineClientPoolTest extends TestCase
                 return [];
             }
 
+            public function canBanChannelParticipants(int|string $channel): bool
+            {
+                return false;
+            }
+
+            public function getChannelParticipants(int|string $channel, int $offset, int $limit): array
+            {
+                return [];
+            }
+
+            public function banChannelParticipant(int|string $channel, int $participantId): void {}
+
+            public function unbanChannelParticipant(int|string $channel, int $participantId): void {}
+
             public function joinChannel(int|string $channel): void {}
         };
     }

@@ -3,12 +3,18 @@
 namespace App\Actions;
 
 use App\DeliveryStatus;
+use App\Filament\Resources\Deliveries\DeliveryResource;
 use App\Models\Delivery;
+use App\OperationsNotificationTopic;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class RecoverStaleDeliveryPublications
 {
+    public function __construct(
+        private readonly QueueOperationsNotification $queueOperationsNotification,
+    ) {}
+
     public function isStale(Delivery $delivery, ?Carbon $now = null): bool
     {
         return $delivery->status === DeliveryStatus::Publishing
@@ -20,13 +26,14 @@ class RecoverStaleDeliveryPublications
         $detectedAt = now();
         $cutoff = $detectedAt->clone()->subSeconds($this->staleAfterSeconds());
         $recovered = 0;
+        $recoveredIds = [];
 
         Delivery::query()
             ->where('status', DeliveryStatus::Publishing)
             ->where('updated_at', '<=', $cutoff)
             ->orderBy('id')
             ->pluck('id')
-            ->each(function (int $deliveryId) use ($cutoff, $detectedAt, &$recovered): void {
+            ->each(function (int $deliveryId) use ($cutoff, $detectedAt, &$recovered, &$recoveredIds): void {
                 $wasRecovered = DB::transaction(function () use ($deliveryId, $cutoff, $detectedAt): bool {
                     $delivery = Delivery::query()
                         ->lockForUpdate()
@@ -56,8 +63,29 @@ class RecoverStaleDeliveryPublications
 
                 if ($wasRecovered) {
                     $recovered++;
+                    $recoveredIds[] = $deliveryId;
                 }
             });
+
+        if ($recoveredIds !== []) {
+            $visibleIds = array_slice($recoveredIds, 0, 20);
+            $idsLine = 'Delivery: #'.implode(', #', $visibleIds);
+
+            if (count($recoveredIds) > count($visibleIds)) {
+                $idsLine .= ' и ещё '.(count($recoveredIds) - count($visibleIds));
+            }
+
+            $this->queueOperationsNotification->handle(
+                OperationsNotificationTopic::Failures,
+                'Обнаружены зависшие публикации',
+                [
+                    'Количество: '.count($recoveredIds),
+                    $idsLine,
+                    'Требуется ручная проверка отправки в Telegram.',
+                ],
+                DeliveryResource::getUrl('index', panel: 'admin'),
+            );
+        }
 
         return $recovered;
     }

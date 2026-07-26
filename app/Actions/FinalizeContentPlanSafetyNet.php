@@ -3,10 +3,12 @@
 namespace App\Actions;
 
 use App\ContentPlanStatus;
+use App\Filament\Resources\ContentPlans\ContentPlanResource;
 use App\Models\ContentPlan;
 use App\Models\ModerationAction;
 use App\Models\PlannedPost;
 use App\ModerationActionType;
+use App\OperationsNotificationTopic;
 use App\PlannedPostStatus;
 use App\Services\PlannedPostMediaManager;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +19,7 @@ class FinalizeContentPlanSafetyNet
     public function __construct(
         private readonly ApprovePlannedPost $approvePlannedPost,
         private readonly PlannedPostMediaManager $mediaManager,
+        private readonly QueueOperationsNotification $queueOperationsNotification,
     ) {}
 
     public function handle(ContentPlan $contentPlan): void
@@ -55,6 +58,19 @@ class FinalizeContentPlanSafetyNet
                 'failure_reason' => 'Активный канал назначения для страховочной автопубликации не настроен.',
                 'failed_at' => now(),
             ]);
+            $this->queueOperationsNotification->handle(
+                OperationsNotificationTopic::Failures,
+                "Терминальный сбой автоматической модерации для «{$contentPlan->publication->name}»",
+                [
+                    'Дата: '.$contentPlan->plan_date->format('d.m.Y'),
+                    'Ошибка: '.$contentPlan->failure_reason,
+                ],
+                ContentPlanResource::getUrl(
+                    'edit',
+                    ['record' => $contentPlan],
+                    panel: 'admin',
+                ),
+            );
 
             return;
         }
