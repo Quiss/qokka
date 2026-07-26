@@ -128,7 +128,7 @@ class ModerationFlowTest extends TestCase
         $builtPlan = $plan->fresh();
 
         $this->assertSame(ContentPlanStatus::Rewriting, $builtPlan->status);
-        $this->assertSame(array_slice($slots, 0, 2), $builtPlan->slot_schedule);
+        $this->assertSame([$slots[0], $slots[2]], $builtPlan->slot_schedule);
         $this->assertCount(2, $builtPlan->plannedPosts);
         $this->assertSame(0, app(PopulateContentPlanSafetyNet::class)->futureVacantSlotCount($builtPlan));
         Queue::assertPushed(RewritePlannedPostJob::class, 2);

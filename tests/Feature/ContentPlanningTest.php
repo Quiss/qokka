@@ -55,6 +55,41 @@ class ContentPlanningTest extends TestCase
         }
     }
 
+    public function test_fewer_posts_are_spread_across_the_full_publication_window(): void
+    {
+        $slots = collect(range(9, 21, 2))
+            ->map(fn (int $hour): string => CarbonImmutable::parse(
+                "2026-07-27 {$hour}:00:00",
+                'Europe/Moscow',
+            )->utc()->toIso8601String())
+            ->all();
+        $generator = app(ContentPlanSlotGenerator::class);
+
+        $spreadSlots = $generator->spreadAcrossWindow($slots, 4);
+        $singleSlot = $generator->spreadAcrossWindow($slots, 1);
+
+        $this->assertSame(
+            ['09:00', '13:00', '17:00', '21:00'],
+            array_map(
+                fn (string $slot): string => CarbonImmutable::parse($slot)
+                    ->setTimezone('Europe/Moscow')
+                    ->format('H:i'),
+                $spreadSlots,
+            ),
+        );
+        $this->assertSame(
+            ['15:00'],
+            array_map(
+                fn (string $slot): string => CarbonImmutable::parse($slot)
+                    ->setTimezone('Europe/Moscow')
+                    ->format('H:i'),
+                $singleSlot,
+            ),
+        );
+        $this->assertSame($slots, $generator->spreadAcrossWindow($slots, count($slots) + 1));
+        $this->assertSame([], $generator->spreadAcrossWindow($slots, 0));
+    }
+
     public function test_open_router_ranking_serializes_immutable_posted_at_and_enum_media(): void
     {
         Http::preventStrayRequests();
@@ -94,14 +129,18 @@ class ContentPlanningTest extends TestCase
             ->rankAndCluster($plan, $sourcePost->newCollection([$sourcePost]));
 
         $this->assertSame([], $result['clusters']);
-        Http::assertSent(function (Request $request): bool {
+        Http::assertSent(function (Request $request) use ($plan): bool {
             $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
 
             return str_contains($prompt, '"media":["photo"]')
+                && str_contains($prompt, '"plan_date":"'.$plan->plan_date->toDateString().'"')
+                && str_contains($prompt, '"publication_timezone":"Europe\/Moscow"')
+                && str_contains($prompt, 'Не включай прогноз погоды')
+                && str_contains($prompt, 'относительно posted_at источника')
                 && ! str_contains($prompt, '"selection_prompt"')
                 && ! str_contains($prompt, 'обязательный тематический фильтр');
         });
-        $this->assertSame('v2', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v3', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_open_router_validates_draft_cluster_sources_before_returning_them(): void
@@ -216,7 +255,7 @@ class ContentPlanningTest extends TestCase
         }
 
         $this->assertSame(
-            ['v2', 'v2'],
+            ['v3', 'v3'],
             AiRun::query()->oldest('id')->pluck('prompt_version')->all(),
         );
     }
@@ -277,7 +316,10 @@ class ContentPlanningTest extends TestCase
             'publication_id' => $publication->id,
             'external_id' => '@PokaTrend',
         ]);
-        $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-27',
+        ]);
         $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
         $previousPlan = ContentPlan::factory()->create([
             'publication_id' => $publication->id,
@@ -291,11 +333,13 @@ class ContentPlanningTest extends TestCase
         ]);
         $sourcePost = SourcePost::factory()->create([
             'text' => 'Глава компании сказал: «Мы представили новый продукт».',
+            'posted_at' => CarbonImmutable::parse('2026-07-26 18:00:00', 'Europe/Moscow')->utc(),
         ]);
         $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
         $plannedPost = PlannedPost::factory()->create([
             'content_plan_id' => $plan->id,
             'story_candidate_id' => $candidate->id,
+            'scheduled_at' => CarbonImmutable::parse('2026-07-27 12:00:00', 'Europe/Moscow')->utc(),
         ]);
         Http::fake([
             'https://openrouter.test/*' => Http::sequence()
@@ -310,19 +354,75 @@ class ContentPlanningTest extends TestCase
             $result['text'],
         );
         Http::assertSentCount(2);
-        Http::assertSent(function (Request $request): bool {
-            $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
+        $prompt = (string) data_get(Http::recorded()[0][0]->data(), 'messages.1.content.0.text');
+        $this->assertStringContainsString('Разрешена обычная разметка Markdown', $prompt);
+        $this->assertStringContainsString('отдельная цитата в формате > текст', $prompt);
+        $this->assertStringContainsString('единственный источник постоянных требований к тону', $prompt);
+        $this->assertStringContainsString('Пиши ровно одним абзацем, без эмодзи и закончи самым сильным фактом.', $prompt);
+        $this->assertStringContainsString('Недавний пост с повторяющейся структурой.', $prompt);
+        $this->assertStringContainsString('[ПокаТренд](https://t.me/PokaTrend)', $prompt);
+        $this->assertStringContainsString('Плановая публикация: 2026-07-27T12:00:00+03:00', $prompt);
+        $this->assertStringContainsString('stale_at_publication', $prompt);
+        $this->assertStringContainsString('относительно posted_at источника', $prompt);
+        $this->assertStringNotContainsString('легкий инфоповод может занять 1–2 коротких абзаца', $prompt);
+        $this->assertStringNotContainsString('используй от 0 до 2 жирных акцентов', $prompt);
+        $this->assertSame(['v5', 'v5'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+    }
 
-            return str_contains($prompt, 'Разрешена обычная разметка Markdown')
-                && str_contains($prompt, 'отдельная цитата в формате > текст')
-                && str_contains($prompt, 'единственный источник постоянных требований к тону')
-                && str_contains($prompt, 'Пиши ровно одним абзацем, без эмодзи и закончи самым сильным фактом.')
-                && str_contains($prompt, 'Недавний пост с повторяющейся структурой.')
-                && str_contains($prompt, '[ПокаТренд](https://t.me/PokaTrend)')
-                && ! str_contains($prompt, 'легкий инфоповод может занять 1–2 коротких абзаца')
-                && ! str_contains($prompt, 'используй от 0 до 2 жирных акцентов');
-        });
-        $this->assertSame(['v4', 'v4'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+    public function test_plan_review_receives_source_and_publication_times_for_freshness_checks(): void
+    {
+        Http::preventStrayRequests();
+        config([
+            'services.openrouter.key' => 'test-key',
+            'services.openrouter.url' => 'https://openrouter.test/api/v1',
+        ]);
+        $publication = Publication::factory()->create(['timezone' => 'Europe/Moscow']);
+        $slot = CarbonImmutable::parse('2026-07-27 12:00:00', 'Europe/Moscow');
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-27',
+            'slot_schedule' => [$slot->utc()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create([
+            'text' => 'Погода 26 июля: в Петербурге ожидается дождь.',
+            'posted_at' => CarbonImmutable::parse('2026-07-26 18:00:00', 'Europe/Moscow')->utc(),
+        ]);
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $plannedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+            'scheduled_at' => $slot->utc(),
+            'text' => 'В Петербурге ожидается дождь.',
+        ]);
+        Http::fake([
+            'https://openrouter.test/*' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode([
+                            'items' => [[
+                                'planned_post_id' => $plannedPost->id,
+                                'risk_flags' => ['stale_at_publication'],
+                                'reason' => 'Прогноз относится к предыдущему дню.',
+                            ]],
+                            'duplicate_groups' => [],
+                        ], JSON_THROW_ON_ERROR),
+                    ],
+                ]],
+                'usage' => [],
+            ]),
+        ]);
+
+        $result = app(OpenRouterContentIntelligence::class)->reviewPlan($plan);
+
+        $this->assertSame(['stale_at_publication'], $result['items'][0]['risk_flags']);
+        $prompt = (string) data_get(Http::recorded()[0][0]->data(), 'messages.1.content');
+        $this->assertStringContainsString('stale_at_publication', $prompt);
+        $this->assertStringContainsString('"plan_date":"2026-07-27"', $prompt);
+        $this->assertStringContainsString('"publication_timezone":"Europe\/Moscow"', $prompt);
+        $this->assertStringContainsString('"scheduled_at":"2026-07-27T12:00:00+03:00"', $prompt);
+        $this->assertStringContainsString('"posted_at":"2026-07-26T15:00:00+00:00"', $prompt);
+        $this->assertSame('v3', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_publication_builds_each_configured_signature_variant(): void
@@ -458,6 +558,89 @@ class ContentPlanningTest extends TestCase
         $this->assertDatabaseCount('story_candidates', 1);
         $this->assertDatabaseHas('story_candidates', ['content_plan_id' => $plan->id, 'title' => 'Городской проект']);
         $this->assertDatabaseHas('source_post_story_candidate', ['source_post_id' => $news->id, 'is_primary' => true]);
+    }
+
+    public function test_candidate_generation_excludes_weather_that_expires_before_the_plan_date(): void
+    {
+        $this->travelTo(CarbonImmutable::parse('2026-07-26 19:00:00', 'Europe/Moscow'));
+        $group = SourceGroup::factory()->create();
+        $channel = SourceChannel::factory()->create();
+        $group->sourceChannels()->attach($channel);
+        $publication = Publication::factory()->create([
+            'source_group_id' => $group->id,
+            'timezone' => 'Europe/Moscow',
+            'publish_window_start' => '09:00',
+            'publish_window_end' => '09:00',
+            'reserve_multiplier' => 1,
+        ]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-27',
+        ]);
+        $staleDatedWeather = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Погода 26 июля: в Петербурге ожидается дождь.',
+            'posted_at' => now()->subHour(),
+        ]);
+        $staleRelativeWeather = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Сегодняшняя погода будет дождливой.',
+            'posted_at' => now()->subHour(),
+        ]);
+        $currentWeather = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Завтра погода будет солнечной.',
+            'posted_at' => now()->subHour(),
+        ]);
+        $cityNews = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'В Петербурге открыли новую станцию метро.',
+            'posted_at' => now()->subHour(),
+        ]);
+        $fake = new class($cityNews->id) implements ContentIntelligence
+        {
+            /** @var list<int> */
+            public array $receivedPostIds = [];
+
+            public function __construct(private readonly int $sourcePostId) {}
+
+            public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
+            {
+                $this->receivedPostIds = array_values(
+                    $sourcePosts->pluck('id')->map(fn (mixed $id): int => (int) $id)->all(),
+                );
+
+                return ['clusters' => [[
+                    'source_post_ids' => [$this->sourcePostId],
+                    'title' => 'Новая станция метро',
+                    'summary' => 'Станция начала принимать пассажиров.',
+                    'score' => 90,
+                    'risk_flags' => [],
+                ]]];
+            }
+
+            public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
+            {
+                return ['text' => ''];
+            }
+
+            public function reviewPlan(ContentPlan $contentPlan): array
+            {
+                return ['items' => [], 'duplicate_groups' => []];
+            }
+        };
+        $this->app->instance(ContentIntelligence::class, $fake);
+
+        app(GenerateCandidateBatch::class)->handle($plan);
+
+        $this->assertNotContains($staleDatedWeather->id, $fake->receivedPostIds);
+        $this->assertNotContains($staleRelativeWeather->id, $fake->receivedPostIds);
+        $this->assertContains($currentWeather->id, $fake->receivedPostIds);
+        $this->assertContains($cityNews->id, $fake->receivedPostIds);
+        $this->assertDatabaseHas('story_candidates', [
+            'content_plan_id' => $plan->id,
+            'title' => 'Новая станция метро',
+        ]);
     }
 
     public function test_candidate_generation_excludes_approved_sources_from_previous_plans_for_the_same_publication(): void

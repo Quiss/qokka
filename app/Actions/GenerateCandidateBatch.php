@@ -11,6 +11,7 @@ use App\Models\ContentPlan;
 use App\Models\SourcePost;
 use App\OperationsNotificationTopic;
 use App\Services\ContentPlanSlotGenerator;
+use App\Services\WeatherFreshnessGuard;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +23,7 @@ class GenerateCandidateBatch
     public function __construct(
         private readonly ContentIntelligence $contentIntelligence,
         private readonly ContentPlanSlotGenerator $slotGenerator,
+        private readonly WeatherFreshnessGuard $weatherFreshnessGuard,
         private readonly QueueOperationsNotification $queueOperationsNotification,
     ) {}
 
@@ -82,7 +84,8 @@ class GenerateCandidateBatch
             ->orderByDesc('posted_at')
             ->limit(120)
             ->get()
-            ->filter(fn (SourcePost $post): bool => $this->passesDeterministicFilters($post, $publication->content_filters ?? []))
+            ->filter(fn (SourcePost $post): bool => $this->passesDeterministicFilters($post, $publication->content_filters ?? [])
+                && ! $this->weatherFreshnessGuard->isStaleForPlan($post, $contentPlan->plan_date, $publication->timezone))
             ->values();
 
         if (! $append) {

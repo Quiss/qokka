@@ -10,6 +10,7 @@ use App\Models\ContentPlan;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\SourcePost;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -41,6 +42,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
     {
         $publication = $contentPlan->publication;
         $rankingData = [
+            ...$this->temporalPlanContext($contentPlan),
             'candidate_target' => $contentPlan->candidate_target,
             'posts' => $sourcePosts->map(fn ($post): array => [
                 'id' => $post->id,
@@ -65,6 +67,9 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'text' => 'Сгруппируй сообщения об одном инфоповоде, оцени новостную ценность от 0 до 100 и верни лучшие кластеры. '
                 .$this->selectionFilterInstruction($publication->selection_prompt)
                 .'Учитывай предварительный балл, свежесть, охват, реакции, вес источника, практическую ценность и оригинальность. '
+                .'Отбирай инфоповод только если он останется актуальным к указанным слотам публикации. '
+                .'Не включай прогноз погоды, дорожное ограничение, отключение, расписание, анонс или другую оперативную информацию, если она относится к более ранней дате или закончится до публикации. '
+                .'Относительные слова «сегодня», «завтра» и подобные трактуй относительно posted_at источника. Не переноси старый факт на дату плана и не исправляй дату догадкой. '
                 .'Если источники противоречат друг другу, перечисли конфликтующие факты в source_conflicts и добавь флаг source_conflict. '
                 .'Не объединяй похожие, но разные события. Реклама, вакансии, розыгрыши, пустые ссылки и дубли должны получить низкий балл. Данные: '
                 .json_encode($rankingData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
@@ -88,7 +93,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->analysis_model ?: config('services.openrouter.analysis_model'),
             [$this->systemMessage('Ты редактор русскоязычного новостного канала. Не выдумывай факты.'), $prompt],
             $this->rankingSchema(),
-            'v2',
+            'v3',
         ));
 
         if ($draft['clusters'] === []) {
@@ -109,6 +114,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $candidate = $plannedPost->storyCandidate;
         $publication = $plannedPost->contentPlan->publication;
         $signature = $publication->signatureMarkdown($publication->destination);
+        $publicationMoment = $plannedPost->scheduled_at?->setTimezone($publication->timezone);
         $recentPosts = PlannedPost::query()
             ->where('id', '<>', $plannedPost->id)
             ->whereNotNull('text')
@@ -133,6 +139,9 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'type' => 'text',
             'text' => 'Перепиши инфоповод в готовый самостоятельный Telegram-пост. Не указывай источники и не добавляй неподтвержденные факты. '
                 .'Используй только согласованные или однозначно подтвержденные сведения. Противоречивые детали не включай в текст и добавь риск source_conflict. '
+                .'Плановая публикация: '.($publicationMoment?->toIso8601String() ?? 'не задана').", часовой пояс: {$publication->timezone}. "
+                .'Проверь, будет ли инфоповод актуален в этот момент. Если прогноз, ограничение, отключение, расписание, анонс или другая оперативная информация относится к уже прошедшей дате, не подменяй дату и добавь риск stale_at_publication. '
+                .'Слова «сегодня», «завтра» и подобные в источниках трактуй относительно posted_at источника, а в готовом тексте используй только тогда, когда они однозначно верны для момента публикации. '
                 .'Разрешена обычная разметка Markdown: **жирный**, *курсив*, ~~зачеркнутый~~, [текст](https://example.com) и отдельная цитата в формате > текст. Другие конструкции Markdown не используй. '
                 .'Цитируй только слова, которые дословно присутствуют в материалах; не придумывай цитаты и не превращай пересказ в прямую речь. '
                 .(filled($instruction) ? 'Разовая дополнительная инструкция редактора для этого рерайта: '.$instruction.'. При конфликте стилевых требований она имеет приоритет над постоянной инструкцией канала. ' : '')
@@ -162,7 +171,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
             [$this->systemMessage('Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.'), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
-            'v4',
+            'v5',
         ));
 
         if ($this->hasExpectedSignature($result['text'], $signature)) {
@@ -178,7 +187,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
             ],
             $this->rewriteSchema(),
-            'v4',
+            'v5',
         ));
 
         if (! $this->hasExpectedSignature($corrected['text'], $signature)) {
@@ -197,14 +206,19 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $contentPlan->loadMissing('publication', 'plannedPosts.storyCandidate.sourcePosts.sourceChannel');
         $items = $contentPlan->plannedPosts->map(fn ($post): array => [
             'planned_post_id' => $post->id,
-            'scheduled_at' => $post->scheduled_at?->toIso8601String(),
+            'scheduled_at' => $post->scheduled_at?->setTimezone($contentPlan->publication->timezone)->toIso8601String(),
             'text' => $post->text,
             'sources' => $post->storyCandidate->sourcePosts->map(fn (SourcePost $sourcePost): array => [
                 'source_post_id' => $sourcePost->id,
                 'channel' => $sourcePost->sourceChannel->title,
                 'text' => Str::limit($sourcePost->text ?? '', 2000),
+                'posted_at' => $sourcePost->posted_at->toIso8601String(),
             ])->values()->all(),
         ])->all();
+        $reviewData = [
+            ...$this->temporalPlanContext($contentPlan),
+            'items' => $items,
+        ];
 
         return $this->reviewResult($this->execute(
             $contentPlan,
@@ -214,11 +228,13 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $this->systemMessage('Ты выпускающий редактор. Блокируй дубли, противоречия, недостоверные формулировки и нежелательный контент.'),
                 ['role' => 'user', 'content' => 'Проверь план целиком и верни риски для каждого поста и группы смысловых дублей. '
                     .'Сверяй каждое фактическое утверждение с приложенными sources. Для сведений, которых нет в источниках, добавляй риск unsupported_claim и кратко указывай неподтвержденное утверждение в reason. '
+                    .'Сопоставь posted_at каждого источника с scheduled_at поста и часовым поясом плана. Если погода, ограничение, отключение, расписание, анонс или другая оперативная информация устареет до публикации, добавь риск stale_at_publication. '
+                    .'Не исправляй дату догадкой и не считай старый прогноз актуальным только из-за свежей формулировки рерайта. '
                     .'Разметка Markdown, эмоциональная подача и подпись сами по себе не являются рисками: '
-                    .json_encode($items, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
+                    .json_encode($reviewData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
             ],
             $this->reviewSchema(),
-            'v2',
+            'v3',
         ));
     }
 
@@ -320,6 +336,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             ->values()
             ->all();
         $validationData = [
+            ...$this->temporalPlanContext($contentPlan),
             'candidate_target' => $contentPlan->candidate_target,
             'draft_clusters' => $draft['clusters'],
             'posts' => $posts,
@@ -337,6 +354,8 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                     .'В одном кластере должны быть только сообщения об одном и том же конкретном событии. Общая тема, один бренд, молния, кино, еда или один источник не означают один инфоповод. '
                     .'Удаляй каждый source_post_id, текст которого не подтверждает заголовок и summary. Один source_post_id разрешено использовать максимум в одном итоговом кластере. '
                     .'Не объединяй разные фильмы, товары, заявления или события в тематические дайджесты. Если черновик смешал несколько событий, раздели его или оставь только связную часть. '
+                    .'Удаляй кластеры с прогнозом погоды, ограничением, отключением, расписанием, анонсом или другой оперативной информацией, которая относится к дате раньше плана либо закончится до возможного слота публикации. '
+                    .'Относительные даты считай от posted_at источника; не заменяй исходную дату датой плана. '
                     .'Перепиши title и summary так, чтобы они описывали исключительно оставшиеся источники. Не добавляй идентификаторы, которых нет в posts. '
                     .'Верни не более candidate_target кластеров. Данные: '
                     .json_encode($validationData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
@@ -352,8 +371,26 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $prompt,
             ],
             $this->rankingSchema(),
-            'v2',
+            'v3',
         ));
+    }
+
+    /** @return array{plan_date: string, publication_timezone: string, publication_slots: list<string>, evaluated_at: string} */
+    private function temporalPlanContext(ContentPlan $contentPlan): array
+    {
+        $timezone = $contentPlan->publication->timezone;
+
+        return [
+            'plan_date' => $contentPlan->plan_date->toDateString(),
+            'publication_timezone' => $timezone,
+            'publication_slots' => array_map(
+                fn (string $slot): string => CarbonImmutable::parse($slot)
+                    ->setTimezone($timezone)
+                    ->toIso8601String(),
+                $contentPlan->slot_schedule ?? [],
+            ),
+            'evaluated_at' => now()->setTimezone($timezone)->toIso8601String(),
+        ];
     }
 
     private function selectionFilterInstruction(?string $selectionPrompt): string

@@ -27,6 +27,39 @@ class ContentPlanSlotGenerator
         return $slots;
     }
 
+    /**
+     * @param  list<string>  $slots
+     * @return list<string>
+     */
+    public function spreadAcrossWindow(array $slots, int $postCount): array
+    {
+        $slotCount = count($slots);
+        $selectedCount = min(max(0, $postCount), $slotCount);
+
+        if ($selectedCount === 0) {
+            return [];
+        }
+
+        if ($selectedCount === $slotCount) {
+            return $slots;
+        }
+
+        if ($selectedCount === 1) {
+            return [$slots[intdiv($slotCount, 2)]];
+        }
+
+        $selectedSlots = [];
+        $lastSlotIndex = $slotCount - 1;
+        $lastPostIndex = $selectedCount - 1;
+
+        for ($postIndex = 0; $postIndex < $selectedCount; $postIndex++) {
+            $slotIndex = (int) round($postIndex * $lastSlotIndex / $lastPostIndex);
+            $selectedSlots[] = $slots[$slotIndex];
+        }
+
+        return $selectedSlots;
+    }
+
     private function intervalFor(Publication $publication, string $date, int $index): int
     {
         $minimum = (int) $publication->min_interval_minutes;

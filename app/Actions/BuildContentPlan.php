@@ -6,6 +6,7 @@ use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\Jobs\RewritePlannedPostJob;
 use App\Models\ContentPlan;
+use App\Services\ContentPlanSlotGenerator;
 use App\Services\PlannedPostMediaManager;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +15,10 @@ use LogicException;
 
 class BuildContentPlan
 {
-    public function __construct(private readonly PlannedPostMediaManager $mediaManager) {}
+    public function __construct(
+        private readonly PlannedPostMediaManager $mediaManager,
+        private readonly ContentPlanSlotGenerator $slotGenerator,
+    ) {}
 
     public function handle(ContentPlan $contentPlan): ContentPlan
     {
@@ -50,7 +54,7 @@ class BuildContentPlan
                 ]);
             }
 
-            $selectedSlots = array_slice($slots, 0, $selected->count());
+            $selectedSlots = $this->slotGenerator->spreadAcrossWindow($slots, $selected->count());
             $ids = [];
 
             foreach ($selected as $index => $candidate) {
