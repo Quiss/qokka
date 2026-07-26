@@ -49,7 +49,7 @@ class EditContentPlan extends EditRecord
                 ->visible(fn (): bool => $this->contentPlan()->status === ContentPlanStatus::CandidateReview
                     && $this->contentPlan()->plannedPosts()->doesntExist())
                 ->action(function (QueueContentPlanGeneration $queue): void {
-                    $queued = $queue->handle($this->contentPlan());
+                    $queued = $queue->handle($this->contentPlan(), allowRegeneration: true);
                     Notification::make()
                         ->title($queued ? 'Повторная сборка поставлена в очередь' : 'Подборка уже собирается или план уже запущен')
                         ->status($queued ? 'success' : 'warning')

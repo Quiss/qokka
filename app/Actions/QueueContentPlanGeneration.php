@@ -9,12 +9,16 @@ use Illuminate\Support\Facades\DB;
 
 class QueueContentPlanGeneration
 {
-    public function handle(ContentPlan $contentPlan): bool
+    public function handle(ContentPlan $contentPlan, bool $allowRegeneration = false): bool
     {
-        $queued = DB::transaction(function () use ($contentPlan): bool {
+        $queued = DB::transaction(function () use ($contentPlan, $allowRegeneration): bool {
             $lockedPlan = ContentPlan::query()->lockForUpdate()->findOrFail($contentPlan->id);
 
             if ($lockedPlan->status === ContentPlanStatus::Generating) {
+                return false;
+            }
+
+            if ($lockedPlan->generated_at !== null && ! $allowRegeneration) {
                 return false;
             }
 

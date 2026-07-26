@@ -64,7 +64,7 @@ class RetryContentPlan
         });
 
         if ($retryMode === 'generation') {
-            $this->queueContentPlanGeneration->handle($contentPlan);
+            $this->queueContentPlanGeneration->handle($contentPlan, allowRegeneration: true);
         }
     }
 }

@@ -54,6 +54,33 @@ class EditorialWorkflowReliabilityTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_generated_candidate_batch_is_not_automatically_queued_again(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create([
+            'generated_at' => now(),
+        ]);
+
+        $this->assertFalse(app(QueueContentPlanGeneration::class)->handle($plan));
+        $this->assertSame(ContentPlanStatus::CandidateReview, $plan->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_generated_candidate_batch_can_be_explicitly_queued_for_regeneration(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create([
+            'generated_at' => now(),
+        ]);
+
+        $this->assertTrue(app(QueueContentPlanGeneration::class)->handle(
+            $plan,
+            allowRegeneration: true,
+        ));
+        $this->assertSame(ContentPlanStatus::Generating, $plan->fresh()->status);
+        Queue::assertPushed(GenerateCandidateBatchJob::class, 1);
+    }
+
     public function test_empty_candidate_batch_is_marked_as_generated(): void
     {
         $group = SourceGroup::factory()->create();

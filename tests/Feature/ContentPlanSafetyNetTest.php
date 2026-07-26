@@ -106,6 +106,26 @@ class ContentPlanSafetyNetTest extends TestCase
         );
     }
 
+    public function test_scheduled_generation_does_not_requeue_an_existing_generated_plan(): void
+    {
+        Queue::fake();
+        $this->travelTo(CarbonImmutable::parse('2026-07-26 20:00:00', 'Europe/Moscow'));
+        $publication = Publication::factory()->create([
+            'planning_time' => '19:30',
+        ]);
+        $contentPlan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'plan_date' => '2026-07-27',
+            'status' => ContentPlanStatus::CandidateReview,
+            'generated_at' => now()->subMinute(),
+        ]);
+
+        $this->artisan('content-plans:generate-due')->assertSuccessful();
+
+        $this->assertSame(ContentPlanStatus::CandidateReview, $contentPlan->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
     public function test_command_ignores_publications_with_the_safety_net_disabled(): void
     {
         Queue::fake();
