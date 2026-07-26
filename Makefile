@@ -16,6 +16,7 @@ PWD := $(shell pwd)
 PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
 PUBLISH_DRAIN_TIMEOUT ?= 620
 PUBLISH_QUEUE ?= redis:publish
+POSTGRES_MIN_CONNECTIONS ?= 200
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
 	--env HOME=/tmp \
@@ -40,6 +41,7 @@ deploy:
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
 	git pull; \
+	$(MAKE) reconcile-containers; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
 	$(MAKE) restart-all; \
@@ -134,6 +136,19 @@ restore-storage-latest:
 # Workers Restart
 # ===========================================
 
+# Apply changes from docker-compose.production.yml and remove stale containers.
+reconcile-containers:
+	$(PRODUCTION_COMPOSE) up -d --remove-orphans --wait --wait-timeout 180
+	$(MAKE) verify-postgres-capacity
+
+verify-postgres-capacity:
+	@ACTUAL_CONNECTIONS=$$($(PRODUCTION_COMPOSE) exec -T pgsql psql -U $(DB_USERNAME) -d $(DB_DATABASE) -Atc "SHOW max_connections"); \
+	if [ "$$ACTUAL_CONNECTIONS" -lt "$(POSTGRES_MIN_CONNECTIONS)" ]; then \
+		echo "PostgreSQL max_connections=$$ACTUAL_CONNECTIONS, minimum $(POSTGRES_MIN_CONNECTIONS). Recreate the pgsql container."; \
+		exit 1; \
+	fi; \
+	echo "PostgreSQL max_connections=$$ACTUAL_CONNECTIONS"
+
 # Reload Octane workers gracefully
 restart-app:
 	$(PRODUCTION_COMPOSE) exec app php artisan octane:reload
@@ -165,7 +180,7 @@ restart-all: restart-app restart-workers
 	@echo "Application and all workers restarted"
 
 # Rebuild Laravel caches and reload all long-running application services
-reload-all:
+reload-all: reconcile-containers
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize
 	$(MAKE) restart-all
 	@echo "All services reloaded"
@@ -193,6 +208,7 @@ import-db:
 .PHONY: first deploy deploy-full staging build \
         backup backup-init backup-db backup-storage backup-cleanup backup-list \
         restore-db-latest restore-storage-latest \
+        reconcile-containers verify-postgres-capacity \
         restart-app restart-horizon restart-scheduler restart-madeline \
         restart-workers restart-all reload-all \
         import-db

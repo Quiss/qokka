@@ -33,4 +33,6 @@ interface MadelineClient
     public function unbanChannelParticipant(int|string $channel, int $participantId): void;
 
     public function joinChannel(int|string $channel): void;
+
+    public function muteNotifications(int|string $peer): void;
 }

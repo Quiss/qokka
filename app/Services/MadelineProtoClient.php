@@ -7,6 +7,8 @@ use danog\MadelineProto\API;
 
 class MadelineProtoClient implements MadelineClient
 {
+    private const int MUTE_FOREVER_UNTIL = 2147483647;
+
     public function __construct(private readonly API $api) {}
 
     public function downloadToFile(mixed $media, string $path): string
@@ -96,5 +98,20 @@ class MadelineProtoClient implements MadelineClient
     public function joinChannel(int|string $channel): void
     {
         $this->api->channels->joinChannel(channel: $channel);
+    }
+
+    public function muteNotifications(int|string $peer): void
+    {
+        $this->api->account->updateNotifySettings(
+            peer: [
+                '_' => 'inputNotifyPeer',
+                'peer' => $peer,
+            ],
+            settings: [
+                '_' => 'inputPeerNotifySettings',
+                'silent' => true,
+                'mute_until' => self::MUTE_FOREVER_UNTIL,
+            ],
+        );
     }
 }

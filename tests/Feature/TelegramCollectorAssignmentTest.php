@@ -113,7 +113,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($preferred));
     }
 
-    public function test_public_source_is_joined_before_collector_is_assigned(): void
+    public function test_public_source_is_joined_and_muted_before_collector_is_assigned(): void
     {
         $account = $this->connectedAccount();
         $sourceChannel = SourceChannel::factory()->create([
@@ -127,9 +127,14 @@ class TelegramCollectorAssignmentTest extends TestCase
         $client->shouldReceive('joinChannel')
             ->once()
             ->with('@trendi')
+            ->ordered()
             ->andReturnUsing(function () use ($sourceChannel): void {
                 $this->assertNull($sourceChannel->fresh()->collector_telegram_account_id);
             });
+        $client->shouldReceive('muteNotifications')
+            ->once()
+            ->with('@trendi')
+            ->ordered();
 
         $selected = $this->assignmentAction([$account->uuid => $client])->handle($sourceChannel);
 
@@ -157,6 +162,7 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->andThrow(new RuntimeException('CHANNELS_TOO_MUCH'));
         $backupClient = Mockery::mock(MadelineClient::class);
         $backupClient->shouldReceive('joinChannel')->once()->with('@trendi');
+        $backupClient->shouldReceive('muteNotifications')->once()->with('@trendi');
 
         $selected = $this->assignmentAction([
             $preferred->uuid => $preferredClient,
@@ -175,7 +181,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         $this->assertSame('CHANNELS_TOO_MUCH', $preferredAccess->last_error);
     }
 
-    public function test_already_participant_error_is_treated_as_success(): void
+    public function test_already_participant_error_is_treated_as_success_and_notifications_are_muted(): void
     {
         $account = $this->connectedAccount();
         $sourceChannel = SourceChannel::factory()->create(['username' => 'trendi']);
@@ -188,6 +194,7 @@ class TelegramCollectorAssignmentTest extends TestCase
                 400,
                 'channels.joinChannel',
             ));
+        $client->shouldReceive('muteNotifications')->once()->with('@trendi');
         $subscriber = $this->subscriptionAction([$account->uuid => $client]);
 
         $subscriber->handle($account, $sourceChannel);
@@ -265,6 +272,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         ]);
         $preferredClient = Mockery::mock(MadelineClient::class);
         $preferredClient->shouldReceive('joinChannel')->once()->with('@trendi');
+        $preferredClient->shouldReceive('muteNotifications')->once()->with('@trendi');
         $reconciler = new ReconcileTelegramCollectors(
             $this->assignmentAction([$preferred->uuid => $preferredClient]),
         );
@@ -293,6 +301,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         ]);
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('joinChannel')->once()->with('@trendi');
+        $client->shouldReceive('muteNotifications')->once()->with('@trendi');
 
         $selected = $this->assignmentAction([$account->uuid => $client])->handle(
             $sourceChannel,

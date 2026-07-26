@@ -18,18 +18,20 @@ class SubscribeTelegramCollectorToSource
             return;
         }
 
+        $peer = '@'.$sourceChannel->username;
+
         try {
-            $this->clientPool
-                ->forAccount($telegramAccount)
-                ->joinChannel('@'.$sourceChannel->username);
-        } catch (RPCErrorException $exception) {
-            if ($exception->rpc === 'USER_ALREADY_PARTICIPANT') {
-                return;
+            $client = $this->clientPool->forAccount($telegramAccount);
+
+            try {
+                $client->joinChannel($peer);
+            } catch (RPCErrorException $exception) {
+                if ($exception->rpc !== 'USER_ALREADY_PARTICIPANT') {
+                    throw $exception;
+                }
             }
 
-            $this->clientPool->forget($telegramAccount);
-
-            throw $exception;
+            $client->muteNotifications($peer);
         } catch (Throwable $exception) {
             $this->clientPool->forget($telegramAccount);
 
