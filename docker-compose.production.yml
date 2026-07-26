@@ -112,7 +112,6 @@ services:
     stop_grace_period: 120s
     environment:
       DB_APPLICATION_NAME: channelbot-madeline
-      TELEGRAM_DATABASE_MAX_CONNECTIONS: ${TELEGRAM_DATABASE_MAX_CONNECTIONS:-1}
     volumes: *app-volumes
     networks:
       - default
