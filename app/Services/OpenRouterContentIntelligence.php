@@ -40,26 +40,34 @@ class OpenRouterContentIntelligence implements ContentIntelligence
     public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
     {
         $publication = $contentPlan->publication;
-        $posts = $sourcePosts->map(fn ($post): array => [
-            'id' => $post->id,
-            'channel' => $post->sourceChannel->title,
-            'channel_weight' => (float) $post->sourceChannel->weight,
-            'text' => Str::limit($post->text ?? '', 1500),
-            'metrics' => $post->metrics,
-            'posted_at' => $post->posted_at->toIso8601String(),
-            'preliminary_score' => $this->preliminaryScore($post->metrics ?? [], $post->posted_at, (float) $post->sourceChannel->weight),
-            'media' => $post->mediaAssets
-                ->map(fn (MediaAsset $asset): string => $asset->type->value)
-                ->all(),
-        ])->values()->all();
+        $rankingData = [
+            'candidate_target' => $contentPlan->candidate_target,
+            'posts' => $sourcePosts->map(fn ($post): array => [
+                'id' => $post->id,
+                'channel' => $post->sourceChannel->title,
+                'channel_weight' => (float) $post->sourceChannel->weight,
+                'text' => Str::limit($post->text ?? '', 1500),
+                'metrics' => $post->metrics,
+                'posted_at' => $post->posted_at->toIso8601String(),
+                'preliminary_score' => $this->preliminaryScore($post->metrics ?? [], $post->posted_at, (float) $post->sourceChannel->weight),
+                'media' => $post->mediaAssets
+                    ->map(fn (MediaAsset $asset): string => $asset->type->value)
+                    ->all(),
+            ])->values()->all(),
+        ];
+
+        if (filled($publication->selection_prompt)) {
+            $rankingData['selection_prompt'] = $publication->selection_prompt;
+        }
 
         $content = [[
             'type' => 'text',
             'text' => 'Сгруппируй сообщения об одном инфоповоде, оцени новостную ценность от 0 до 100 и верни лучшие кластеры. '
+                .$this->selectionFilterInstruction($publication->selection_prompt)
                 .'Учитывай предварительный балл, свежесть, охват, реакции, вес источника, практическую ценность и оригинальность. '
                 .'Если источники противоречат друг другу, перечисли конфликтующие факты в source_conflicts и добавь флаг source_conflict. '
                 .'Не объединяй похожие, но разные события. Реклама, вакансии, розыгрыши, пустые ссылки и дубли должны получить низкий балл. Данные: '
-                .json_encode(['candidate_target' => $contentPlan->candidate_target, 'posts' => $posts], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                .json_encode($rankingData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
         ]];
 
         foreach ($sourcePosts->filter(fn ($post): bool => blank($post->text))->flatMap->mediaAssets->where('type', MediaType::Photo)->take(8) as $asset) {
@@ -80,6 +88,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->analysis_model ?: config('services.openrouter.analysis_model'),
             [$this->systemMessage('Ты редактор русскоязычного новостного канала. Не выдумывай факты.'), $prompt],
             $this->rankingSchema(),
+            'v2',
         ));
 
         if ($draft['clusters'] === []) {
@@ -310,21 +319,27 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             ])
             ->values()
             ->all();
+        $validationData = [
+            'candidate_target' => $contentPlan->candidate_target,
+            'draft_clusters' => $draft['clusters'],
+            'posts' => $posts,
+        ];
+
+        if (filled($contentPlan->publication->selection_prompt)) {
+            $validationData['selection_prompt'] = $contentPlan->publication->selection_prompt;
+        }
         $prompt = [
             'role' => 'user',
             'content' => [[
                 'type' => 'text',
                 'text' => 'Проверь черновые кластеры перед сохранением. Это строгий факт-чек связей, а не повторное творческое ранжирование. '
+                    .$this->selectionFilterInstruction($contentPlan->publication->selection_prompt)
                     .'В одном кластере должны быть только сообщения об одном и том же конкретном событии. Общая тема, один бренд, молния, кино, еда или один источник не означают один инфоповод. '
                     .'Удаляй каждый source_post_id, текст которого не подтверждает заголовок и summary. Один source_post_id разрешено использовать максимум в одном итоговом кластере. '
                     .'Не объединяй разные фильмы, товары, заявления или события в тематические дайджесты. Если черновик смешал несколько событий, раздели его или оставь только связную часть. '
                     .'Перепиши title и summary так, чтобы они описывали исключительно оставшиеся источники. Не добавляй идентификаторы, которых нет в posts. '
                     .'Верни не более candidate_target кластеров. Данные: '
-                    .json_encode([
-                        'candidate_target' => $contentPlan->candidate_target,
-                        'draft_clusters' => $draft['clusters'],
-                        'posts' => $posts,
-                    ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                    .json_encode($validationData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
             ]],
         ];
 
@@ -337,7 +352,20 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $prompt,
             ],
             $this->rankingSchema(),
+            'v2',
         ));
+    }
+
+    private function selectionFilterInstruction(?string $selectionPrompt): string
+    {
+        if (blank($selectionPrompt)) {
+            return '';
+        }
+
+        return 'Примени selection_prompt из данных как обязательный тематический фильтр. '
+            .'Полностью исключи не соответствующие ему инфоповоды независимо от их охвата, свежести и предварительного балла. '
+            .'Не заполняй candidate_target нерелевантными новостями: верни меньше кластеров или пустой список, если подходящих материалов недостаточно. '
+            .'В selection_reason каждого оставленного кластера объясни, как он соответствует selection_prompt. ';
     }
 
     /** @param array<string, int|float> $metrics */

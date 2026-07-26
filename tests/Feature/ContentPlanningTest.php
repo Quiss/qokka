@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Actions\GenerateCandidateBatch;
+use App\AiOperation;
 use App\CandidateStatus;
+use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
 use App\MediaType;
 use App\Models\AiRun;
@@ -92,10 +94,14 @@ class ContentPlanningTest extends TestCase
             ->rankAndCluster($plan, $sourcePost->newCollection([$sourcePost]));
 
         $this->assertSame([], $result['clusters']);
-        Http::assertSent(fn (Request $request): bool => str_contains(
-            (string) data_get($request->data(), 'messages.1.content.0.text'),
-            '"media":["photo"]',
-        ));
+        Http::assertSent(function (Request $request): bool {
+            $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
+
+            return str_contains($prompt, '"media":["photo"]')
+                && ! str_contains($prompt, '"selection_prompt"')
+                && ! str_contains($prompt, 'обязательный тематический фильтр');
+        });
+        $this->assertSame('v2', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_open_router_validates_draft_cluster_sources_before_returning_them(): void
@@ -154,6 +160,103 @@ class ContentPlanningTest extends TestCase
             (string) data_get($request->data(), 'messages.1.content.0.text'),
             'набор для битья крапивы',
         ));
+    }
+
+    public function test_open_router_applies_channel_selection_prompt_to_ranking_and_validation(): void
+    {
+        Http::preventStrayRequests();
+        config([
+            'services.openrouter.key' => 'test-key',
+            'services.openrouter.url' => 'https://openrouter.test/api/v1',
+        ]);
+        $selectionPrompt = 'Отбирай только новости, напрямую связанные с Санкт-Петербургом.';
+        $publication = Publication::factory()->create(['selection_prompt' => $selectionPrompt]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'candidate_target' => 1,
+        ]);
+        $channel = SourceChannel::factory()->create();
+        $sourcePost = SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'В Санкт-Петербурге открыли новую станцию метро.',
+        ])->load(['sourceChannel', 'mediaAssets']);
+        $cluster = [
+            'source_post_ids' => [$sourcePost->id],
+            'title' => 'В Петербурге открыли станцию метро',
+            'summary' => 'Новая станция начала принимать пассажиров.',
+            'score' => 90,
+            'score_breakdown' => [],
+            'selection_reason' => 'Событие напрямую связано с Санкт-Петербургом.',
+            'risk_flags' => [],
+            'source_conflicts' => [],
+        ];
+        Http::fake([
+            'https://openrouter.test/*' => Http::sequence()
+                ->push($this->openRouterResponse([$cluster]))
+                ->push($this->openRouterResponse([$cluster])),
+        ]);
+
+        $result = app(OpenRouterContentIntelligence::class)
+            ->rankAndCluster($plan, $sourcePost->newCollection([$sourcePost]));
+
+        $this->assertSame([$sourcePost->id], $result['clusters'][0]['source_post_ids']);
+        $this->assertSame($selectionPrompt, $publication->fresh()->selection_prompt);
+        Http::assertSentCount(2);
+
+        foreach ([AiOperation::RankAndCluster, AiOperation::ValidateClusters] as $operation) {
+            Http::assertSent(function (Request $request) use ($operation, $selectionPrompt): bool {
+                $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
+
+                return data_get($request->data(), 'response_format.json_schema.name') === $operation->value
+                    && str_contains($prompt, $selectionPrompt)
+                    && str_contains($prompt, 'обязательный тематический фильтр')
+                    && str_contains($prompt, 'верни меньше кластеров или пустой список')
+                    && str_contains($prompt, 'selection_reason');
+            });
+        }
+
+        $this->assertSame(
+            ['v2', 'v2'],
+            AiRun::query()->oldest('id')->pluck('prompt_version')->all(),
+        );
+    }
+
+    public function test_strict_selection_filter_can_generate_an_empty_plan(): void
+    {
+        Http::preventStrayRequests();
+        config([
+            'services.openrouter.key' => 'test-key',
+            'services.openrouter.url' => 'https://openrouter.test/api/v1',
+        ]);
+        $group = SourceGroup::factory()->create();
+        $channel = SourceChannel::factory()->create();
+        $group->sourceChannels()->attach($channel);
+        $publication = Publication::factory()->create([
+            'source_group_id' => $group->id,
+            'selection_prompt' => 'Отбирай только новости Санкт-Петербурга.',
+        ]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'status' => ContentPlanStatus::Generating,
+        ]);
+        SourcePost::factory()->create([
+            'source_channel_id' => $channel->id,
+            'text' => 'Общероссийская новость без связи с Петербургом.',
+            'posted_at' => now()->subHour(),
+        ]);
+        Http::fake([
+            'https://openrouter.test/*' => Http::response(
+                $this->openRouterResponse([]),
+            ),
+        ]);
+
+        app(GenerateCandidateBatch::class)->handle($plan);
+
+        $plan->refresh();
+        $this->assertSame(ContentPlanStatus::CandidateReview, $plan->status);
+        $this->assertNotNull($plan->generated_at);
+        $this->assertSame(0, $plan->storyCandidates()->count());
+        Http::assertSentCount(1);
     }
 
     public function test_rewrite_uses_channel_editorial_instruction_and_retries_an_invalid_signature_once(): void

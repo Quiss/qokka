@@ -27,6 +27,7 @@ class PublicationFactory extends Factory
             'language' => 'ru',
             'timezone' => 'Europe/Moscow',
             'tone_prompt' => 'Пиши динамично, ясно и без канцелярита.',
+            'selection_prompt' => null,
             'content_filters' => [],
             'planning_time' => '18:00',
             'publish_window_start' => '09:00',
