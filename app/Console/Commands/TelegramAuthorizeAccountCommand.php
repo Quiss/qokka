@@ -3,9 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
-use App\Services\MadelineSettingsFactory;
+use App\Services\MadelineApiFactory;
 use App\TelegramAccountStatus;
-use danog\MadelineProto\API;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -16,7 +15,7 @@ use Throwable;
 #[Description('Подключить или повторно авторизовать Telegram-аккаунт MadelineProto')]
 class TelegramAuthorizeAccountCommand extends Command
 {
-    public function handle(MadelineSettingsFactory $settingsFactory): int
+    public function handle(MadelineApiFactory $apiFactory): int
     {
         $name = trim((string) $this->argument('name'));
         $account = TelegramAccount::query()->firstOrCreate(
@@ -28,10 +27,7 @@ class TelegramAuthorizeAccountCommand extends Command
         $this->line('Если QR недоступен, MadelineProto предложит вход по телефону и коду.');
 
         try {
-            $api = new API(
-                $settingsFactory->sessionPath($account),
-                $settingsFactory->make($account),
-            );
+            $api = $apiFactory->make($account);
             $api->start();
             $self = $api->getSelf();
 

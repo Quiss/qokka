@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
-use App\Services\MadelineSettingsFactory;
+use App\Services\MadelineApiFactory;
 use App\Telegram\ChannelSourceEventHandler;
 use App\TelegramAccountStatus;
 use danog\MadelineProto\API;
@@ -18,7 +18,7 @@ class TelegramListenCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(MadelineSettingsFactory $settingsFactory): int
+    public function handle(MadelineApiFactory $apiFactory): int
     {
         if ((string) config('services.telegram.bridge_secret') === '') {
             $this->error('TELEGRAM_BRIDGE_SECRET не настроен. Укажите общий секрет для listener и HTTP bridge.');
@@ -40,10 +40,7 @@ class TelegramListenCommand extends Command
 
         $instances = $accounts
             ->mapWithKeys(fn (TelegramAccount $account): array => [
-                $account->uuid => new API(
-                    $settingsFactory->sessionPath($account),
-                    $settingsFactory->make($account),
-                ),
+                $account->uuid => $apiFactory->make($account),
             ])
             ->all();
 
