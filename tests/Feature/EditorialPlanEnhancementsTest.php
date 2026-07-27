@@ -661,6 +661,7 @@ class EditorialPlanEnhancementsTest extends TestCase
             'score' => 87,
             'score_breakdown' => ['freshness' => 9.5, 'reach' => 8],
             'ai_reason' => 'Высокая актуальность и хороший охват.',
+            'risk_flags' => ['unsupported_claim'],
             'status' => CandidateStatus::Pending,
         ]);
         $candidate->sourcePosts()->attach($source, ['is_primary' => true]);
@@ -673,6 +674,7 @@ class EditorialPlanEnhancementsTest extends TestCase
         ])
             ->assertSee('Новость для первого этапа отбора')
             ->assertSee('87 / 100')
+            ->assertSee('Есть неподтверждённое утверждение')
             ->assertSee('Открыть')
             ->assertSee('Одобрить')
             ->mountAction(TestAction::make('open')->table($candidate))
@@ -689,7 +691,11 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertSee('Источники кластера')
             ->assertSee('Детали события из первичного источника')
             ->assertSee('Основной источник')
-            ->assertSee('Фото');
+            ->assertSee('Фото')
+            ->assertSee('Есть неподтверждённое утверждение')
+            ->assertDontSee('unsupported_claim');
+
+        $this->assertSame(['unsupported_claim'], $candidate->fresh()->risk_flags);
     }
 
     public function test_candidate_review_moves_rejected_news_down_and_offers_to_replenish_the_deficit(): void

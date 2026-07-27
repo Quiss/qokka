@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\StoryCandidates\Schemas;
 
 use App\CandidateStatus;
+use App\RiskFlagLabels;
 use Filament\Forms\Components\KeyValue;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
@@ -34,6 +35,8 @@ class StoryCandidateForm
                 Textarea::make('ai_reason')
                     ->columnSpanFull(),
                 TagsInput::make('risk_flags')
+                    ->label('Риски')
+                    ->formatStateUsing(fn (?array $state): array => RiskFlagLabels::labels($state ?? []))
                     ->disabled()
                     ->dehydrated(false),
                 Select::make('status')

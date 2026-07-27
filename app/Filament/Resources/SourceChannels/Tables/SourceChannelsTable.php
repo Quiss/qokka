@@ -12,8 +12,10 @@ use Filament\Actions\EditAction;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Number;
 use Illuminate\Support\Str;
 
 class SourceChannelsTable
@@ -33,22 +35,18 @@ class SourceChannelsTable
             ->columns([
                 TextColumn::make('title')
                     ->label('Источник')
-                    ->searchable(),
-                TextColumn::make('username')
-                    ->label('Telegram')
-                    ->formatStateUsing(fn (?string $state): string => $state ? '@'.$state : '—')
-                    ->searchable(),
+                    ->description(fn (SourceChannel $record): string => $record->username ? '@'.$record->username : 'Telegram не указан')
+                    ->searchable(['title', 'username'])
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('sourceGroups.name')
                     ->label('Группы')
-                    ->badge(),
-                TextColumn::make('preferredCollectorTelegramAccount.name')
-                    ->label('Предпочтительный сборщик')
-                    ->placeholder('Автоматически'),
-                TextColumn::make('collectorTelegramAccount.name')
-                    ->label('Текущий сборщик')
-                    ->placeholder('Не назначен'),
-                TextColumn::make('collector_status')
-                    ->label('Статус сборщика')
+                    ->badge()
+                    ->limitList(2)
+                    ->expandableLimitedList()
+                    ->toggleable(),
+                TextColumn::make('collector')
+                    ->label('Сборщик')
                     ->state(fn (SourceChannel $record): string => $record->collectorStatus())
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         'automatic' => 'Автоматически',
@@ -57,35 +55,70 @@ class SourceChannelsTable
                         default => 'Нет доступного',
                     })
                     ->badge()
+                    ->toggleable()
                     ->color(fn (SourceChannel $record): string => match ($record->collectorStatus()) {
                         'preferred' => 'success',
                         'fallback' => 'warning',
                         'automatic' => 'info',
                         default => 'danger',
                     })
-                    ->description(function (SourceChannel $record): ?string {
+                    ->description(function (SourceChannel $record): string {
+                        $currentCollector = $record->collector_telegram_account_id === null
+                            ? 'не назначен'
+                            : $record->collectorTelegramAccount->name;
+                        $preferredCollector = $record->preferred_collector_telegram_account_id === null
+                            ? 'автовыбор'
+                            : $record->preferredCollectorTelegramAccount->name;
                         $lastError = $record->collectorLastError();
 
-                        return $lastError ? Str::limit($lastError, 100) : null;
+                        $description = "Текущий: {$currentCollector} · Предпочтительный: {$preferredCollector}";
+
+                        return $lastError
+                            ? $description.' · Ошибка: '.Str::limit($lastError, 60)
+                            : $description;
                     })
                     ->tooltip(fn (SourceChannel $record): ?string => $record->collectorLastError())
                     ->wrap(),
+                TextColumn::make('statistics')
+                    ->label('Статистика · 24ч')
+                    ->state(fn (SourceChannel $record): string => implode(' · ', [
+                        Number::format((int) $record->posts_last_day_count, locale: 'ru').' постов',
+                        Number::format((int) $record->views_last_day, locale: 'ru').' просмотров',
+                        Number::format((int) $record->reactions_last_day, locale: 'ru').' реакций',
+                    ]))
+                    ->icon('heroicon-m-chart-bar')
+                    ->wrap()
+                    ->toggleable(),
+                IconColumn::make('is_active')
+                    ->label('Активен')
+                    ->boolean()
+                    ->toggleable(),
+                TextColumn::make('last_event_at')
+                    ->label('Последняя новость')
+                    ->since()
+                    ->placeholder('Нет событий')
+                    ->sortable()
+                    ->toggleable(),
                 TextColumn::make('weight')
                     ->label('Вес')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('posts_last_day_count')
                     ->label('Постов · 24ч')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('views_last_day')
                     ->label('Просмотры · 24ч')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('reactions_last_day')
                     ->label('Реакции · 24ч')
                     ->numeric()
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('forwards_last_day')
                     ->label('Пересылки · 24ч')
                     ->numeric()
@@ -96,31 +129,34 @@ class SourceChannelsTable
                     ->numeric()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                IconColumn::make('is_active')
-                    ->label('Активен')
-                    ->boolean(),
-                TextColumn::make('last_event_at')
-                    ->label('Последняя новость')
-                    ->since()
-                    ->placeholder('Нет событий')
-                    ->sortable(),
                 TextColumn::make('last_backfilled_at')
                     ->label('Статистика обновлена')
                     ->since()
                     ->placeholder('Ещё не синхронизирована')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('created_at')
+                    ->label('Создан')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('updated_at')
+                    ->label('Изменён')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                //
+                SelectFilter::make('sourceGroups')
+                    ->label('Группы')
+                    ->relationship('sourceGroups', 'name')
+                    ->multiple()
+                    ->searchable()
+                    ->preload(),
             ])
+            ->reorderableColumns()
+            ->deferColumnManager(false)
+            ->columnManagerColumns(2)
             ->recordActions([
                 Action::make('syncStatistics')
                     ->label('Обновить статистику')

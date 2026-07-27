@@ -4,6 +4,7 @@ namespace App\Filament\Resources\PlannedPosts\Schemas;
 
 use App\Models\PlannedPost;
 use App\PlannedPostStatus;
+use App\RiskFlagLabels;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Placeholder;
@@ -40,6 +41,8 @@ class PlannedPostForm
                 Placeholder::make('status')
                     ->content(fn (?PlannedPost $record): string => $record === null ? PlannedPostStatus::Rewriting->value : $record->status->value),
                 TagsInput::make('risk_flags')
+                    ->label('Риски')
+                    ->formatStateUsing(fn (?array $state): array => RiskFlagLabels::labels($state ?? []))
                     ->disabled()
                     ->dehydrated(false),
                 Textarea::make('override_reason')

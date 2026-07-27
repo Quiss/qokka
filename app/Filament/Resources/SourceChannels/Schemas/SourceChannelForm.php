@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\SourceChannels\Schemas;
 
+use App\Models\SourceChannel;
 use App\Models\TelegramAccount;
 use App\TelegramAccountStatus;
 use Filament\Forms\Components\Select;
@@ -15,6 +16,10 @@ class SourceChannelForm
 {
     public static function configure(Schema $schema): Schema
     {
+        $normalizeUsername = fn (mixed $state): ?string => filled($state)
+            ? SourceChannel::normalizeUsername((string) $state)
+            : null;
+
         return $schema
             ->components([
                 Section::make('Источник')
@@ -24,11 +29,21 @@ class SourceChannelForm
                         TextInput::make('username')
                             ->label('Ссылка или username')
                             ->placeholder('@channel или https://t.me/channel')
-                            ->helperText('Для публичного канала. @ и ссылка будут нормализованы автоматически.'),
+                            ->helperText('Для публичного канала. @ и ссылка будут нормализованы автоматически.')
+                            ->mutateStateForValidationUsing($normalizeUsername)
+                            ->dehydrateStateUsing($normalizeUsername)
+                            ->unique()
+                            ->validationMessages([
+                                'unique' => 'Этот Telegram-канал уже добавлен в источники.',
+                            ]),
                         TextInput::make('telegram_peer_id')
                             ->label('Telegram peer ID')
                             ->numeric()
-                            ->helperText('Для приватного канала, обычно начинается с -100.'),
+                            ->helperText('Для приватного канала, обычно начинается с -100.')
+                            ->unique()
+                            ->validationMessages([
+                                'unique' => 'Источник с таким Telegram peer ID уже добавлен.',
+                            ]),
                         TextInput::make('title')
                             ->label('Название')
                             ->helperText('Можно оставить пустым — оно заполнится после проверки.'),

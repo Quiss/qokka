@@ -7,6 +7,7 @@ use App\Models\ContentPlan;
 use App\Models\Publication;
 use App\Models\TelegramAccount;
 use App\Models\User;
+use App\RiskFlagLabels;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -50,6 +51,19 @@ class AdminWorkflowUiTest extends TestCase
         );
         $this->assertSame('Утверждение плана', ContentPlanStatus::CandidateReview->getLabel());
         $this->assertSame('Рерайт', ContentPlanStatus::Rewriting->getLabel());
+    }
+
+    public function test_risk_flag_codes_have_human_readable_labels_without_changing_the_codes(): void
+    {
+        $this->assertSame(
+            'Есть неподтверждённое утверждение',
+            RiskFlagLabels::label('unsupported_claim'),
+        );
+        $this->assertSame(
+            ['Источники расходятся в деталях', 'Информация устареет к публикации'],
+            RiskFlagLabels::labels(['source_conflict', 'stale_at_publication']),
+        );
+        $this->assertSame('Требует ручной проверки', RiskFlagLabels::label('new_ai_risk'));
     }
 
     public function test_content_plans_are_sorted_by_editorial_priority(): void

@@ -11,6 +11,7 @@ use App\Models\PlannedPostRevision;
 use App\Models\User;
 use App\ModerationActionType;
 use App\PlannedPostStatus;
+use App\RiskFlagLabels;
 use App\Services\PlannedPostMediaManager;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
@@ -88,6 +89,7 @@ class PlannedPostsTable
                         TextColumn::make('risk_flags')
                             ->label('Риски')
                             ->badge()
+                            ->formatStateUsing(fn (string $state): string => RiskFlagLabels::label($state))
                             ->placeholder('Рисков нет')
                             ->limitList(2),
                         TextColumn::make('media_preparation_status')
@@ -341,15 +343,8 @@ class PlannedPostsTable
     private static function riskDescription(PlannedPost $record): string
     {
         $risks = collect($record->risk_flags ?? [])
-            ->map(fn (string $risk): string => match ($risk) {
-                'source_conflict' => 'источники расходятся в деталях',
-                'unreliable_content' => 'часть сведений требует ручной проверки',
-                'possible_duplicate', 'duplicate_in_daily_plan' => 'возможен дубликат',
-                'duplicate_recent_publication' => 'повтор недавней публикации',
-                'older_than_24h' => 'новость старше 24 часов',
-                'ai_review_missing' => 'не получена итоговая проверка ИИ',
-                default => Str::of($risk)->replace('_', ' ')->toString(),
-            })
+            ->map(RiskFlagLabels::label(...))
+            ->map(fn (string $risk): string => Str::lcfirst($risk))
             ->implode('; ');
 
         return 'ИИ отметил: '.$risks.'. Если вы проверили текст, публикацию можно одобрить без комментария.';

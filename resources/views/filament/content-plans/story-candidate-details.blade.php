@@ -83,7 +83,7 @@
                 <div class="mt-3 flex flex-wrap gap-2">
                     @foreach ($record->risk_flags as $risk)
                         <span class="rounded-full bg-warning-100 px-2.5 py-1 text-xs font-medium text-warning-900 dark:bg-warning-500/20 dark:text-warning-100">
-                            {{ $risk }}
+                            {{ \App\RiskFlagLabels::label($risk) }}
                         </span>
                     @endforeach
                 </div>

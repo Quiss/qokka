@@ -9,6 +9,7 @@ use App\ContentPlanStatus;
 use App\Models\MediaAsset;
 use App\Models\StoryCandidate;
 use App\Models\User;
+use App\RiskFlagLabels;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\EditAction;
@@ -93,6 +94,7 @@ class StoryCandidatesTable
                         TextColumn::make('risk_flags')
                             ->label('Риски')
                             ->badge()
+                            ->formatStateUsing(fn (string $state): string => RiskFlagLabels::label($state))
                             ->placeholder('Рисков нет')
                             ->limitList(2),
                     ])->space(1)->grow(false),

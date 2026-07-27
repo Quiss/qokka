@@ -76,6 +76,12 @@ services:
     depends_on:
       app:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # Horizon (Laravel queue manager)
   horizon:
@@ -118,6 +124,12 @@ services:
     depends_on:
       app:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f '[p]hp artisan telegram:listen' > /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # PostgreSQL
   pgsql:

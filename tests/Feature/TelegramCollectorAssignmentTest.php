@@ -11,6 +11,7 @@ use App\Filament\Resources\SourceChannels\Pages\EditSourceChannel;
 use App\Filament\Resources\SourceChannels\Pages\ListSourceChannels;
 use App\Jobs\VerifySourceChannelAccessJob;
 use App\Models\SourceChannel;
+use App\Models\SourceGroup;
 use App\Models\TelegramAccount;
 use App\Models\User;
 use App\Services\MadelineClientFactory;
@@ -18,6 +19,8 @@ use App\Services\MadelineClientPool;
 use App\TelegramAccountStatus;
 use App\TelegramSourceAccessStatus;
 use danog\MadelineProto\RPCErrorException;
+use Filament\Facades\Filament;
+use Filament\Tables\Columns\Column;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -56,6 +59,91 @@ class TelegramCollectorAssignmentTest extends TestCase
             VerifySourceChannelAccessJob::class,
             fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $sourceChannel->id,
         );
+    }
+
+    public function test_duplicate_public_source_is_shown_as_a_form_error_after_username_normalization(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        SourceChannel::factory()->create(['username' => 'smotret_skachatt']);
+
+        $this->actingAs($user);
+
+        Livewire::test(CreateSourceChannel::class)
+            ->fillForm([
+                'username' => 'https://t.me/smotret_skachatt/',
+                'weight' => 1,
+                'sourceGroups' => [],
+                'is_active' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['username' => 'unique'])
+            ->assertSee('Этот Telegram-канал уже добавлен в источники.');
+
+        $this->assertSame(1, SourceChannel::query()->count());
+    }
+
+    public function test_duplicate_private_source_is_shown_as_a_form_error(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        SourceChannel::factory()->create([
+            'username' => null,
+            'telegram_peer_id' => -1001234567890,
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test(CreateSourceChannel::class)
+            ->fillForm([
+                'telegram_peer_id' => -1001234567890,
+                'weight' => 1,
+                'sourceGroups' => [],
+                'is_active' => true,
+            ])
+            ->call('create')
+            ->assertHasFormErrors(['telegram_peer_id' => 'unique'])
+            ->assertSee('Источник с таким Telegram peer ID уже добавлен.');
+
+        $this->assertSame(1, SourceChannel::query()->count());
+    }
+
+    public function test_concurrent_duplicate_source_insert_is_converted_to_a_form_error(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        $panel = Filament::getPanel('admin');
+
+        SourceChannel::creating(function (SourceChannel $sourceChannel): void {
+            if ($sourceChannel->username !== 'race_condition') {
+                return;
+            }
+
+            SourceChannel::withoutEvents(fn (): SourceChannel => SourceChannel::query()->create([
+                'username' => 'race_condition',
+                'title' => 'Источник из параллельного запроса',
+                'weight' => 1,
+                'is_active' => true,
+            ]));
+        });
+
+        $this->actingAs($user);
+
+        $panel->databaseTransactions();
+
+        try {
+            Livewire::test(CreateSourceChannel::class)
+                ->fillForm([
+                    'username' => '@race_condition',
+                    'weight' => 1,
+                    'sourceGroups' => [],
+                    'is_active' => true,
+                ])
+                ->call('create')
+                ->assertHasFormErrors(['username'])
+                ->assertSee('Этот Telegram-канал уже добавлен в источники.');
+
+            $this->assertSame(0, SourceChannel::query()->count());
+        } finally {
+            $panel->databaseTransactions(false);
+        }
     }
 
     public function test_preferred_collector_can_be_changed_or_cleared_on_update(): void
@@ -317,7 +405,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         $preferred = $this->connectedAccount(['name' => 'Основной']);
         $backup = $this->connectedAccount(['name' => 'Резерв']);
         $sourceChannel = SourceChannel::factory()->create([
-            'username' => null,
+            'username' => 'trendi',
             'preferred_collector_telegram_account_id' => $preferred->id,
             'collector_telegram_account_id' => $backup->id,
         ]);
@@ -336,10 +424,46 @@ class TelegramCollectorAssignmentTest extends TestCase
 
         Livewire::test(ListSourceChannels::class)
             ->assertCanSeeTableRecords([$sourceChannel])
+            ->assertTableColumnHasDescription('title', '@trendi', $sourceChannel)
+            ->assertTableColumnFormattedStateSet('collector', 'Резервный', $sourceChannel)
+            ->assertTableColumnExists(
+                'statistics',
+                checkColumnUsing: fn (Column $column): bool => $column->isToggleable(),
+            )
+            ->assertTableColumnExists(
+                'views_last_day',
+                checkColumnUsing: fn (Column $column): bool => $column->isToggleable()
+                    && $column->isToggledHiddenByDefault(),
+            )
             ->assertSee('Основной')
             ->assertSee('Резерв')
             ->assertSee('Резервный')
             ->assertSee('CHANNELS_TOO_MUCH');
+    }
+
+    public function test_source_table_can_filter_by_one_or_multiple_groups(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        $firstGroup = SourceGroup::factory()->create(['name' => 'Город']);
+        $secondGroup = SourceGroup::factory()->create(['name' => 'Культура']);
+        $otherGroup = SourceGroup::factory()->create(['name' => 'Спорт']);
+        $firstMatch = SourceChannel::factory()->create(['title' => 'Городской источник']);
+        $secondMatch = SourceChannel::factory()->create(['title' => 'Культурный источник']);
+        $excluded = SourceChannel::factory()->create(['title' => 'Спортивный источник']);
+
+        $firstMatch->sourceGroups()->attach($firstGroup);
+        $secondMatch->sourceGroups()->attach($secondGroup);
+        $excluded->sourceGroups()->attach($otherGroup);
+
+        $this->actingAs($user);
+
+        Livewire::test(ListSourceChannels::class)
+            ->filterTable('sourceGroups', [$firstGroup, $secondGroup])
+            ->assertCanSeeTableRecords([$firstMatch, $secondMatch])
+            ->assertCanNotSeeTableRecords([$excluded])
+            ->filterTable('sourceGroups', $firstGroup)
+            ->assertCanSeeTableRecords([$firstMatch])
+            ->assertCanNotSeeTableRecords([$secondMatch, $excluded]);
     }
 
     /**
