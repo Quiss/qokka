@@ -16,6 +16,7 @@ PWD := $(shell pwd)
 PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
 PUBLISH_DRAIN_TIMEOUT ?= 620
 PUBLISH_QUEUE ?= redis:publish
+TELEGRAM_QUEUE ?= redis:telegram
 POSTGRES_MIN_CONNECTIONS ?= 200
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
@@ -37,14 +38,16 @@ first:
 	fi
 deploy:
 	@set -eu; \
-	trap '$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
+	trap '$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
 	git pull; \
 	$(MAKE) reconcile-containers; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
 	$(MAKE) restart-all; \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
 	trap - 0 1 2 15
 

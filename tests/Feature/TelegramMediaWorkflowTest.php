@@ -246,6 +246,34 @@ class TelegramMediaWorkflowTest extends TestCase
         );
     }
 
+    public function test_oversized_media_error_shows_file_size_and_configured_limit(): void
+    {
+        config(['services.telegram.media_max_bytes' => 300 * 1024 * 1024]);
+
+        $plan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'size_bytes' => 367_525_888,
+        ]);
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+
+        try {
+            app(PlannedPostMediaManager::class)->replaceSelection($post, [$asset->id]);
+            $this->fail('Oversized media selection should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['Файл размером 350.5 MB превышает лимит 300 MB и не может быть выбран.'],
+                $exception->errors()['media_asset_ids'],
+            );
+        }
+    }
+
     public function test_post_cannot_be_approved_while_selected_media_is_not_ready(): void
     {
         Queue::fake();

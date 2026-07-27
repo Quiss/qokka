@@ -21,8 +21,10 @@ use App\TelegramSourceAccessStatus;
 use danog\MadelineProto\RPCErrorException;
 use Filament\Facades\Filament;
 use Filament\Tables\Columns\Column;
+use Filament\Tables\Columns\ViewColumn;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Number;
 use Livewire\Livewire;
 use Mockery;
 use RuntimeException;
@@ -428,17 +430,54 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->assertTableColumnFormattedStateSet('collector', 'Резервный', $sourceChannel)
             ->assertTableColumnExists(
                 'statistics',
-                checkColumnUsing: fn (Column $column): bool => $column->isToggleable(),
+                checkColumnUsing: fn (Column $column): bool => $column instanceof ViewColumn
+                    && $column->isToggleable()
+                    && $column->getView() === 'filament.tables.columns.source-channel-statistics',
             )
-            ->assertTableColumnExists(
-                'views_last_day',
-                checkColumnUsing: fn (Column $column): bool => $column->isToggleable()
-                    && $column->isToggledHiddenByDefault(),
-            )
+            ->assertTableColumnDoesNotExist('posts_last_day_count')
+            ->assertTableColumnDoesNotExist('views_last_day')
+            ->assertTableColumnDoesNotExist('reactions_last_day')
+            ->assertTableColumnDoesNotExist('forwards_last_day')
+            ->assertTableColumnDoesNotExist('comments_last_day')
             ->assertSee('Основной')
             ->assertSee('Резерв')
             ->assertSee('Резервный')
             ->assertSee('CHANNELS_TOO_MUCH');
+    }
+
+    public function test_source_statistics_column_shows_an_icon_and_number_for_each_metric(): void
+    {
+        $sourceChannel = SourceChannel::factory()->make()->forceFill([
+            'posts_last_day_count' => 12,
+            'views_last_day' => 1_592,
+            'reactions_last_day' => 347,
+            'forwards_last_day' => 56,
+            'comments_last_day' => 8,
+        ]);
+
+        $html = view('filament.tables.columns.source-channel-statistics', [
+            'record' => $sourceChannel,
+        ])->render();
+
+        $statistics = [
+            'Публикации за 24 часа' => 12,
+            'Просмотры за 24 часа' => 1_592,
+            'Реакции за 24 часа' => 347,
+            'Пересылки за 24 часа' => 56,
+            'Комментарии за 24 часа' => 8,
+        ];
+
+        $this->assertSame(5, substr_count($html, '<svg'));
+
+        foreach ($statistics as $label => $value) {
+            $formattedValue = Number::format($value, locale: 'ru');
+
+            $this->assertStringContainsString("title=\"{$label}\"", $html);
+            $this->assertStringContainsString(
+                "aria-label=\"{$label}: {$formattedValue}\"",
+                $html,
+            );
+        }
     }
 
     public function test_source_table_can_filter_by_one_or_multiple_groups(): void

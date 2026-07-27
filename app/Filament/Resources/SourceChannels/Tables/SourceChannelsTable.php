@@ -12,10 +12,10 @@ use Filament\Actions\EditAction;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ViewColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Number;
 use Illuminate\Support\Str;
 
 class SourceChannelsTable
@@ -79,15 +79,9 @@ class SourceChannelsTable
                     })
                     ->tooltip(fn (SourceChannel $record): ?string => $record->collectorLastError())
                     ->wrap(),
-                TextColumn::make('statistics')
+                ViewColumn::make('statistics')
                     ->label('Статистика · 24ч')
-                    ->state(fn (SourceChannel $record): string => implode(' · ', [
-                        Number::format((int) $record->posts_last_day_count, locale: 'ru').' постов',
-                        Number::format((int) $record->views_last_day, locale: 'ru').' просмотров',
-                        Number::format((int) $record->reactions_last_day, locale: 'ru').' реакций',
-                    ]))
-                    ->icon('heroicon-m-chart-bar')
-                    ->wrap()
+                    ->view('filament.tables.columns.source-channel-statistics')
                     ->toggleable(),
                 IconColumn::make('is_active')
                     ->label('Активен')
@@ -101,31 +95,6 @@ class SourceChannelsTable
                     ->toggleable(),
                 TextColumn::make('weight')
                     ->label('Вес')
-                    ->numeric()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('posts_last_day_count')
-                    ->label('Постов · 24ч')
-                    ->numeric()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('views_last_day')
-                    ->label('Просмотры · 24ч')
-                    ->numeric()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('reactions_last_day')
-                    ->label('Реакции · 24ч')
-                    ->numeric()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('forwards_last_day')
-                    ->label('Пересылки · 24ч')
-                    ->numeric()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('comments_last_day')
-                    ->label('Комментарии · 24ч')
                     ->numeric()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),

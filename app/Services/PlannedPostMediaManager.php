@@ -10,6 +10,7 @@ use App\Models\PlannedPost;
 use App\Models\StoryCandidate;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Number;
 use Illuminate\Validation\ValidationException;
 
 class PlannedPostMediaManager
@@ -68,8 +69,11 @@ class PlannedPostMediaManager
         );
 
         if ($oversized !== null) {
+            $fileSize = Number::fileSize($oversized->size_bytes, maxPrecision: 2);
+            $maxFileSize = Number::fileSize($maxBytes, maxPrecision: 2);
+
             throw ValidationException::withMessages([
-                'media_asset_ids' => 'Файл превышает лимит Telegram 300 МБ и не может быть выбран.',
+                'media_asset_ids' => "Файл размером {$fileSize} превышает лимит {$maxFileSize} и не может быть выбран.",
             ]);
         }
 
