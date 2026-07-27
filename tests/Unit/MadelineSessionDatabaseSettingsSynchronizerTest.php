@@ -28,10 +28,8 @@ class MadelineSessionDatabaseSettingsSynchronizerTest extends TestCase
     {
         parent::setUp();
 
-        $this->errorHandler = set_error_handler(static fn (): bool => false);
-        restore_error_handler();
-        $this->exceptionHandler = set_exception_handler(static fn (Throwable $exception): null => null);
-        restore_exception_handler();
+        $this->errorHandler = $this->currentErrorHandler();
+        $this->exceptionHandler = $this->currentExceptionHandler();
         ob_start();
 
         $this->sessionDirectory = sys_get_temp_dir().'/channelbot-madeline-session-'.bin2hex(random_bytes(8));
@@ -40,8 +38,15 @@ class MadelineSessionDatabaseSettingsSynchronizerTest extends TestCase
     protected function tearDown(): void
     {
         ob_end_clean();
-        set_error_handler($this->errorHandler);
-        set_exception_handler($this->exceptionHandler);
+
+        while ($this->currentErrorHandler() !== $this->errorHandler) {
+            restore_error_handler();
+        }
+
+        while ($this->currentExceptionHandler() !== $this->exceptionHandler) {
+            restore_exception_handler();
+        }
+
         (new Filesystem)->deleteDirectory($this->sessionDirectory);
 
         parent::tearDown();
@@ -125,5 +130,21 @@ class MadelineSessionDatabaseSettingsSynchronizerTest extends TestCase
             ->setMaxConnections($maxConnections)
             ->setIdleTimeout($idleTimeout)
             ->setEphemeralFilesystemPrefix('mp_test_');
+    }
+
+    private function currentErrorHandler(): ?callable
+    {
+        $currentHandler = set_error_handler(static fn (): bool => false);
+        restore_error_handler();
+
+        return $currentHandler;
+    }
+
+    private function currentExceptionHandler(): ?callable
+    {
+        $currentHandler = set_exception_handler(static fn (Throwable $exception): null => null);
+        restore_exception_handler();
+
+        return $currentHandler;
     }
 }
