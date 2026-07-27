@@ -52,7 +52,6 @@ class ContentPlansTable
                         TextColumn::make('status')
                             ->label('Этап')
                             ->badge()
-                            ->formatStateUsing(self::statusLabel(...))
                             ->searchable(),
                         TextColumn::make('plan_summary')
                             ->label('Состав плана')
@@ -158,24 +157,33 @@ class ContentPlansTable
             ])
             ->paginated([10, 25, 50])
             ->defaultPaginationPageOption(10)
-            ->defaultSort('plan_date', 'desc');
-    }
+            ->defaultSort(function (Builder $query): Builder {
+                $statusOrder = ContentPlanStatus::editorialPriority();
+                $bindings = array_map(
+                    fn (ContentPlanStatus $status): string => $status->value,
+                    $statusOrder,
+                );
 
-    private static function statusLabel(mixed $state): string
-    {
-        return match ($state->value ?? $state) {
-            'generating' => 'ИИ отбирает новости',
-            'candidate_review' => 'Утверждение плана',
-            'rewriting' => 'Рерайт',
-            'needs_candidates' => 'Нужен добор',
-            'final_review' => 'Проверка рерайта',
-            'ready' => 'Готов к публикации',
-            'active' => 'Публикуется',
-            'completed' => 'Завершён',
-            'skipped' => 'Пропущен: нет безопасных новостей',
-            'failed' => 'Ошибка',
-            default => (string) ($state->value ?? $state),
-        };
+                return $query
+                    ->orderByRaw(
+                        'CASE status
+                            WHEN ? THEN 10
+                            WHEN ? THEN 20
+                            WHEN ? THEN 30
+                            WHEN ? THEN 40
+                            WHEN ? THEN 50
+                            WHEN ? THEN 60
+                            WHEN ? THEN 70
+                            WHEN ? THEN 80
+                            WHEN ? THEN 90
+                            WHEN ? THEN 100
+                            ELSE 110
+                        END',
+                        $bindings,
+                    )
+                    ->orderByDesc('plan_date')
+                    ->orderByDesc('id');
+            });
     }
 
     private static function validationMessage(ValidationException $exception): string

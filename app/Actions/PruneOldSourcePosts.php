@@ -11,8 +11,6 @@ use InvalidArgumentException;
 
 class PruneOldSourcePosts
 {
-    public const DEFAULT_RETENTION_DAYS = 20;
-
     private const CHUNK_SIZE = 500;
 
     public function __construct(
@@ -22,8 +20,10 @@ class PruneOldSourcePosts
     /**
      * @return array{posts: int, media: int, files: int}
      */
-    public function handle(int $retentionDays = self::DEFAULT_RETENTION_DAYS): array
+    public function handle(?int $retentionDays = null): array
     {
+        $retentionDays ??= (int) config('channelbot.content.retention_days', 14);
+
         if ($retentionDays < 1) {
             throw new InvalidArgumentException('Source post retention must be at least one day.');
         }

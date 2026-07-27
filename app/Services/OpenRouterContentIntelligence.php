@@ -38,12 +38,18 @@ use Throwable;
  */
 class OpenRouterContentIntelligence implements ContentIntelligence
 {
+    public function __construct(
+        private readonly RecentPublicationHistory $recentPublicationHistory,
+    ) {}
+
     public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
     {
         $publication = $contentPlan->publication;
+        $recentCommittedPosts = $this->recentPublicationHistory->forPlan($contentPlan);
         $rankingData = [
             ...$this->temporalPlanContext($contentPlan),
             'candidate_target' => $contentPlan->candidate_target,
+            'recent_committed_posts' => $recentCommittedPosts,
             'posts' => $sourcePosts->map(fn ($post): array => [
                 'id' => $post->id,
                 'channel' => $post->sourceChannel->title,
@@ -71,6 +77,8 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 .'Не включай прогноз погоды, дорожное ограничение, отключение, расписание, анонс или другую оперативную информацию, если она относится к более ранней дате или закончится до публикации. '
                 .'Относительные слова «сегодня», «завтра» и подобные трактуй относительно posted_at источника. Не переноси старый факт на дату плана и не исправляй дату догадкой. '
                 .'Если источники противоречат друг другу, перечисли конфликтующие факты в source_conflicts и добавь флаг source_conflict. '
+                .'Не возвращай инфоповод, если то же конкретное событие уже есть в recent_committed_posts, даже когда новый источник пересказывает его другими словами. '
+                .'Продолжение с новым существенным фактом или новым этапом события не является дублем только из-за общей темы. '
                 .'Не объединяй похожие, но разные события. Реклама, вакансии, розыгрыши, пустые ссылки и дубли должны получить низкий балл. Данные: '
                 .json_encode($rankingData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
         ]];
@@ -93,7 +101,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->analysis_model ?: config('services.openrouter.analysis_model'),
             [$this->systemMessage('Ты редактор русскоязычного новостного канала. Не выдумывай факты.'), $prompt],
             $this->rankingSchema(),
-            'v3',
+            'v5',
         ));
 
         if ($draft['clusters'] === []) {
@@ -217,6 +225,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         ])->all();
         $reviewData = [
             ...$this->temporalPlanContext($contentPlan),
+            'recent_committed_posts' => $this->recentPublicationHistory->forPlan($contentPlan),
             'items' => $items,
         ];
 
@@ -228,13 +237,15 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $this->systemMessage('Ты выпускающий редактор. Блокируй дубли, противоречия, недостоверные формулировки и нежелательный контент.'),
                 ['role' => 'user', 'content' => 'Проверь план целиком и верни риски для каждого поста и группы смысловых дублей. '
                     .'Сверяй каждое фактическое утверждение с приложенными sources. Для сведений, которых нет в источниках, добавляй риск unsupported_claim и кратко указывай неподтвержденное утверждение в reason. '
+                    .'Сравни каждый пост с recent_committed_posts. Если это повтор того же конкретного события, добавь риск duplicate_recent_publication и укажи historical id в reason. '
+                    .'Не считай дублем продолжение с новым существенным фактом или новым этапом события только из-за общей темы. '
                     .'Сопоставь posted_at каждого источника с scheduled_at поста и часовым поясом плана. Если погода, ограничение, отключение, расписание, анонс или другая оперативная информация устареет до публикации, добавь риск stale_at_publication. '
                     .'Не исправляй дату догадкой и не считай старый прогноз актуальным только из-за свежей формулировки рерайта. '
                     .'Разметка Markdown, эмоциональная подача и подпись сами по себе не являются рисками: '
                     .json_encode($reviewData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
             ],
             $this->reviewSchema(),
-            'v3',
+            'v5',
         ));
     }
 
@@ -371,7 +382,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $prompt,
             ],
             $this->rankingSchema(),
-            'v3',
+            'v5',
         ));
     }
 

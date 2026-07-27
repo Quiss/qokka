@@ -17,22 +17,22 @@ class SourcePostPruningTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_command_prunes_only_source_posts_older_than_twenty_days(): void
+    public function test_command_prunes_only_source_posts_older_than_fourteen_days(): void
     {
         $this->travelTo('2026-07-24 12:00:00');
         Storage::fake('local');
         $channel = SourceChannel::factory()->create();
         $oldPost = SourcePost::factory()->create([
             'source_channel_id' => $channel->id,
-            'posted_at' => now()->subDays(20)->subSecond(),
+            'posted_at' => now()->subDays(14)->subSecond(),
         ]);
         $boundaryPost = SourcePost::factory()->create([
             'source_channel_id' => $channel->id,
-            'posted_at' => now()->subDays(20),
+            'posted_at' => now()->subDays(14),
         ]);
         $recentPost = SourcePost::factory()->create([
             'source_channel_id' => $channel->id,
-            'posted_at' => now()->subDays(19),
+            'posted_at' => now()->subDays(13),
         ]);
         $message = SourceMessage::factory()->create([
             'source_post_id' => $oldPost->id,
@@ -72,7 +72,7 @@ class SourcePostPruningTest extends TestCase
         $channel = SourceChannel::factory()->create();
         $sourcePost = SourcePost::factory()->create([
             'source_channel_id' => $channel->id,
-            'posted_at' => now()->subDays(21),
+            'posted_at' => now()->subDays(15),
         ]);
         $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
             'path' => 'telegram/shared.jpg',

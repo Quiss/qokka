@@ -140,7 +140,7 @@ class ContentPlanningTest extends TestCase
                 && ! str_contains($prompt, '"selection_prompt"')
                 && ! str_contains($prompt, 'обязательный тематический фильтр');
         });
-        $this->assertSame('v3', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v5', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_open_router_validates_draft_cluster_sources_before_returning_them(): void
@@ -255,7 +255,7 @@ class ContentPlanningTest extends TestCase
         }
 
         $this->assertSame(
-            ['v3', 'v3'],
+            ['v5', 'v5'],
             AiRun::query()->oldest('id')->pluck('prompt_version')->all(),
         );
     }
@@ -422,7 +422,7 @@ class ContentPlanningTest extends TestCase
         $this->assertStringContainsString('"publication_timezone":"Europe\/Moscow"', $prompt);
         $this->assertStringContainsString('"scheduled_at":"2026-07-27T12:00:00+03:00"', $prompt);
         $this->assertStringContainsString('"posted_at":"2026-07-26T15:00:00+00:00"', $prompt);
-        $this->assertSame('v3', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v5', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_publication_builds_each_configured_signature_variant(): void

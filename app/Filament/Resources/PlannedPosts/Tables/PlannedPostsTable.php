@@ -345,6 +345,7 @@ class PlannedPostsTable
                 'source_conflict' => 'источники расходятся в деталях',
                 'unreliable_content' => 'часть сведений требует ручной проверки',
                 'possible_duplicate', 'duplicate_in_daily_plan' => 'возможен дубликат',
+                'duplicate_recent_publication' => 'повтор недавней публикации',
                 'older_than_24h' => 'новость старше 24 часов',
                 'ai_review_missing' => 'не получена итоговая проверка ИИ',
                 default => Str::of($risk)->replace('_', ' ')->toString(),

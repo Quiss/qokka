@@ -21,6 +21,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $original_ai_text
  * @property int $rewrite_generation
  * @property Carbon|null $scheduled_at
+ * @property Carbon|null $published_at
  * @property PlannedPostStatus $status
  * @property list<string>|null $risk_flags
  * @property string|null $ai_review_status

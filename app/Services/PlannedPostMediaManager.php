@@ -69,7 +69,7 @@ class PlannedPostMediaManager
 
         if ($oversized !== null) {
             throw ValidationException::withMessages([
-                'media_asset_ids' => 'Файл превышает лимит Telegram 50 МБ и не может быть выбран.',
+                'media_asset_ids' => 'Файл превышает лимит Telegram 150 МБ и не может быть выбран.',
             ]);
         }
 
