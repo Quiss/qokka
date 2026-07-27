@@ -8,12 +8,19 @@ use App\Models\Publication;
 use App\Models\TelegramAccount;
 use App\Models\User;
 use App\RiskFlagLabels;
+use Filament\Facades\Filament;
+use Filament\Support\Enums\Width;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class AdminWorkflowUiTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_admin_panel_uses_the_full_available_content_width(): void
+    {
+        $this->assertSame(Width::Full, Filament::getPanel('admin')->getMaxContentWidth());
+    }
 
     public function test_operator_pages_render_for_an_active_admin(): void
     {
