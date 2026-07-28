@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\TelegramAccount;
+use danog\MadelineProto\Logger;
 use danog\MadelineProto\Settings;
 use danog\MadelineProto\Settings\Database\Postgres;
 use Illuminate\Support\Facades\File;
@@ -34,6 +35,7 @@ class MadelineSettingsFactory
             ->setEphemeralFilesystemPrefix('mp_'.str_replace('-', '_', $account->uuid).'_');
 
         $settings = (new Settings)->setDb($database);
+        $settings->getLogger()->setLevel(Logger::NOTICE);
         $settings->getAppInfo()
             ->setApiId((int) $apiId)
             ->setApiHash((string) $apiHash);

@@ -4,11 +4,26 @@ namespace Tests\Unit;
 
 use App\Models\TelegramAccount;
 use App\Services\MadelineSettingsFactory;
+use danog\MadelineProto\Logger;
 use danog\MadelineProto\Settings\Database\Postgres;
 use Tests\TestCase;
 
 class MadelineSettingsFactoryTest extends TestCase
 {
+    public function test_it_uses_notice_logging_level(): void
+    {
+        config([
+            'database.default' => 'pgsql',
+            'services.telegram.api_id' => 12345,
+            'services.telegram.api_hash' => 'test-api-hash',
+        ]);
+        $account = new TelegramAccount(['uuid' => '09ef5735-e830-4f1b-b3a4-5950d1536763']);
+
+        $logger = app(MadelineSettingsFactory::class)->make($account)->getLogger();
+
+        $this->assertSame(Logger::NOTICE, $logger->getLevel());
+    }
+
     public function test_it_uses_madeline_safe_database_pool_defaults(): void
     {
         config([
