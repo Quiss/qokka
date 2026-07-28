@@ -1,0 +1,19 @@
+{
+    "patches": {
+        "amphp/postgres": [
+            {
+                "description": "Treat stale prepared statement deallocation as idempotent",
+                "url": "patches/amphp-postgres-idempotent-deallocate.patch",
+                "depth": 1,
+                "extra": {
+                    "issue-tracker": "https://github.com/amphp/postgres/issues/69",
+                    "freeform": {
+                        "executable": "patch",
+                        "args": "--batch --forward -p%s --directory=%s --input=%s",
+                        "dry_run_args": "--batch --forward --dry-run -p%s --directory=%s --input=%s"
+                    }
+                }
+            }
+        ]
+    }
+}

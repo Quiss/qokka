@@ -1,0 +1,19 @@
+diff --git a/src/Internal/PgSqlHandle.php b/src/Internal/PgSqlHandle.php
+--- a/src/Internal/PgSqlHandle.php
++++ b/src/Internal/PgSqlHandle.php
+@@ -411,7 +411,14 @@ final class PgSqlHandle extends AbstractHandle
+                 return; // Statement already deallocated.
+             }
+ 
+-            $this->query(\sprintf("DEALLOCATE %s", $name));
++            try {
++                $this->query(\sprintf("DEALLOCATE %s", $name));
++            } catch (PostgresQueryError $exception) {
++                if (($exception->getDiagnostics()['sqlstate'] ?? null) !== '26000') {
++                    throw $exception;
++                }
++            }
++
+             unset($this->statements[$name]);
+         });
+         $storage->future->ignore();
