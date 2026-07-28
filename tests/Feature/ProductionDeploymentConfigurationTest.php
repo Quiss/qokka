@@ -25,33 +25,36 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(2, substr_count($deploy, 'queue:continue $(TELEGRAM_QUEUE)'));
     }
 
-    public function test_deploy_reapplies_dependency_patches_while_workers_are_stopped(): void
+    public function test_deploy_gracefully_terminates_horizon_without_stopping_worker_containers(): void
     {
         $makefile = File::get(base_path('Makefile'));
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
+        $restartHorizon = Str::between(
+            $makefile,
+            "restart-horizon:\n",
+            "\n# Restart Scheduler",
+        );
 
         $pauseHorizonPosition = strpos($deploy, 'exec horizon php artisan horizon:pause');
-        $stopHorizonPosition = strpos($deploy, 'stop --timeout 370 horizon');
-        $stopMadelinePosition = strpos($deploy, 'stop --timeout 120 scheduler madeline');
         $composerInstallPosition = strpos($deploy, 'composer install');
-        $composerReinstallPosition = strpos($deploy, 'composer reinstall amphp/postgres');
         $reconcilePosition = strpos($deploy, '$(MAKE) reconcile-containers');
+        $restartHorizonPosition = strpos($deploy, '$(MAKE) restart-horizon');
+        $continueTelegramPosition = strrpos($deploy, 'queue:continue $(TELEGRAM_QUEUE)');
 
         $this->assertIsInt($pauseHorizonPosition);
-        $this->assertIsInt($stopHorizonPosition);
-        $this->assertIsInt($stopMadelinePosition);
         $this->assertIsInt($composerInstallPosition);
-        $this->assertIsInt($composerReinstallPosition);
         $this->assertIsInt($reconcilePosition);
-        $this->assertTrue($pauseHorizonPosition < $stopHorizonPosition);
-        $this->assertTrue($stopHorizonPosition < $stopMadelinePosition);
-        $this->assertTrue($stopMadelinePosition < $composerInstallPosition);
-        $this->assertTrue($composerInstallPosition < $composerReinstallPosition);
-        $this->assertTrue($composerReinstallPosition < $reconcilePosition);
-        $this->assertStringContainsString(
-            'up -d $(DEPLOY_WORKER_SERVICES) >/dev/null 2>&1 || true',
-            $deploy,
-        );
+        $this->assertIsInt($restartHorizonPosition);
+        $this->assertIsInt($continueTelegramPosition);
+        $this->assertTrue($pauseHorizonPosition < $composerInstallPosition);
+        $this->assertTrue($composerInstallPosition < $reconcilePosition);
+        $this->assertTrue($reconcilePosition < $restartHorizonPosition);
+        $this->assertTrue($restartHorizonPosition < $continueTelegramPosition);
+        $this->assertStringContainsString('horizon:terminate', $restartHorizon);
+        $this->assertStringNotContainsString('$(PRODUCTION_COMPOSE) stop', $deploy);
+        $this->assertStringNotContainsString('composer reinstall amphp/postgres', $deploy);
+        $this->assertStringNotContainsString('$(MAKE) restart-madeline', $deploy);
+        $this->assertStringNotContainsString('$(MAKE) restart-all', $deploy);
         $this->assertSame(1, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
     }
 
