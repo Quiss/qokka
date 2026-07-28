@@ -11,6 +11,10 @@ use RuntimeException;
 
 class MadelineSettingsFactory
 {
+    private const int DEFAULT_DATABASE_IDLE_TIMEOUT = 300;
+
+    private const int DEFAULT_DATABASE_MAX_CONNECTIONS = 20;
+
     public function make(TelegramAccount $account): Settings
     {
         $connectionName = (string) config('database.default');
@@ -32,6 +36,14 @@ class MadelineSettingsFactory
             ->setDatabase((string) ($connection['database'] ?? 'laravel'))
             ->setUsername((string) ($connection['username'] ?? 'root'))
             ->setPassword((string) ($connection['password'] ?? ''))
+            ->setMaxConnections($this->positiveIntegerConfig(
+                'services.telegram.database_max_connections',
+                self::DEFAULT_DATABASE_MAX_CONNECTIONS,
+            ))
+            ->setIdleTimeout($this->positiveIntegerConfig(
+                'services.telegram.database_idle_timeout',
+                self::DEFAULT_DATABASE_IDLE_TIMEOUT,
+            ))
             ->setEphemeralFilesystemPrefix('mp_'.str_replace('-', '_', $account->uuid).'_');
 
         $settings = (new Settings)->setDb($database);
@@ -49,5 +61,12 @@ class MadelineSettingsFactory
         File::ensureDirectoryExists($directory);
 
         return $directory.'/'.$account->uuid;
+    }
+
+    private function positiveIntegerConfig(string $key, int $default): int
+    {
+        $value = (int) config($key, $default);
+
+        return $value > 0 ? $value : $default;
     }
 }

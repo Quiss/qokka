@@ -25,6 +25,29 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(2, substr_count($deploy, 'queue:continue $(TELEGRAM_QUEUE)'));
     }
 
+    public function test_deploy_reapplies_dependency_patches_while_workers_are_stopped(): void
+    {
+        $makefile = File::get(base_path('Makefile'));
+        $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
+
+        $stopWorkersPosition = strpos($deploy, 'stop --timeout 370 $(DEPLOY_WORKER_SERVICES)');
+        $composerInstallPosition = strpos($deploy, 'composer install');
+        $composerReinstallPosition = strpos($deploy, 'composer reinstall amphp/postgres');
+        $reconcilePosition = strpos($deploy, '$(MAKE) reconcile-containers');
+
+        $this->assertIsInt($stopWorkersPosition);
+        $this->assertIsInt($composerInstallPosition);
+        $this->assertIsInt($composerReinstallPosition);
+        $this->assertIsInt($reconcilePosition);
+        $this->assertTrue($stopWorkersPosition < $composerInstallPosition);
+        $this->assertTrue($composerInstallPosition < $composerReinstallPosition);
+        $this->assertTrue($composerReinstallPosition < $reconcilePosition);
+        $this->assertStringContainsString(
+            'up -d $(DEPLOY_WORKER_SERVICES) >/dev/null 2>&1 || true',
+            $deploy,
+        );
+    }
+
     public function test_cli_workers_override_the_frankenphp_http_healthcheck(): void
     {
         $compose = File::get(base_path('docker-compose.production.yml'));

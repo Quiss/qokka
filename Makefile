@@ -18,6 +18,7 @@ PUBLISH_DRAIN_TIMEOUT ?= 620
 PUBLISH_QUEUE ?= redis:publish
 TELEGRAM_QUEUE ?= redis:telegram
 POSTGRES_MIN_CONNECTIONS ?= 200
+DEPLOY_WORKER_SERVICES ?= horizon scheduler madeline
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
 	--env HOME=/tmp \
@@ -38,11 +39,14 @@ first:
 	fi
 deploy:
 	@set -eu; \
-	trap '$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
+	trap '$(PRODUCTION_COMPOSE) up -d $(DEPLOY_WORKER_SERVICES) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
+	$(PRODUCTION_COMPOSE) stop --timeout 370 $(DEPLOY_WORKER_SERVICES); \
 	git pull; \
+	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
+	$(PHP_BOOTSTRAP) 'composer reinstall amphp/postgres --ignore-platform-req=ext-intl --prefer-dist --no-interaction --optimize-autoloader'; \
 	$(MAKE) reconcile-containers; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \

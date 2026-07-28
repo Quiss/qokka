@@ -36,29 +36,29 @@ class MadelineSettingsFactoryTest extends TestCase
         $database = app(MadelineSettingsFactory::class)->make($account)->getDb();
 
         $this->assertInstanceOf(Postgres::class, $database);
-        $this->assertSame(100, $database->getMaxConnections());
-        $this->assertSame(60, $database->getIdleTimeout());
+        $this->assertSame(20, $database->getMaxConnections());
+        $this->assertSame(300, $database->getIdleTimeout());
     }
 
-    public function test_it_ignores_legacy_application_pool_overrides(): void
+    public function test_it_applies_application_pool_overrides(): void
     {
         config([
             'database.default' => 'pgsql',
             'services.telegram.api_id' => 12345,
             'services.telegram.api_hash' => 'test-api-hash',
-            'services.telegram.database_max_connections' => 3,
-            'services.telegram.database_idle_timeout' => 15,
+            'services.telegram.database_max_connections' => 12,
+            'services.telegram.database_idle_timeout' => 600,
         ]);
         $account = new TelegramAccount(['uuid' => 'f79ad9ab-e802-41ac-b091-25c4e3ca0d09']);
 
         $database = app(MadelineSettingsFactory::class)->make($account)->getDb();
 
         $this->assertInstanceOf(Postgres::class, $database);
-        $this->assertSame(100, $database->getMaxConnections());
-        $this->assertSame(60, $database->getIdleTimeout());
+        $this->assertSame(12, $database->getMaxConnections());
+        $this->assertSame(600, $database->getIdleTimeout());
     }
 
-    public function test_it_keeps_safe_defaults_when_legacy_pool_config_is_invalid(): void
+    public function test_it_keeps_safe_defaults_when_pool_config_is_invalid(): void
     {
         config([
             'database.default' => 'pgsql',
@@ -72,7 +72,7 @@ class MadelineSettingsFactoryTest extends TestCase
         $database = app(MadelineSettingsFactory::class)->make($account)->getDb();
 
         $this->assertInstanceOf(Postgres::class, $database);
-        $this->assertSame(100, $database->getMaxConnections());
-        $this->assertSame(60, $database->getIdleTimeout());
+        $this->assertSame(20, $database->getMaxConnections());
+        $this->assertSame(300, $database->getIdleTimeout());
     }
 }
