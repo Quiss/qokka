@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\MediaType;
 use App\Models\MediaAsset;
 use App\Services\MadelineClientPool;
+use App\Services\MediaFileGarbageCollector;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -40,8 +41,10 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         return $this->mediaAssetId.':'.($this->previewOnly ? 'preview' : 'full');
     }
 
-    public function handle(MadelineClientPool $clientPool): void
-    {
+    public function handle(
+        MadelineClientPool $clientPool,
+        MediaFileGarbageCollector $mediaFileGarbageCollector,
+    ): void {
         $asset = MediaAsset::query()
             ->with('originMediaAsset.sourceMessage.sourceChannel.collectorTelegramAccount', 'sourceMessage.sourceChannel.collectorTelegramAccount')
             ->find($this->mediaAssetId);
@@ -87,7 +90,9 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             );
 
             if ($freshMessage === null || ! is_array($freshMessage['media'] ?? null)) {
-                throw new RuntimeException('Исходное сообщение с выбранным медиа больше недоступно в Telegram.');
+                $this->discardUnavailableMedia($origin, $mediaFileGarbageCollector);
+
+                return;
             }
 
             $client->downloadToFile(
@@ -267,6 +272,64 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
                 ]);
             }
         }
+    }
+
+    private function discardUnavailableMedia(
+        MediaAsset $origin,
+        MediaFileGarbageCollector $mediaFileGarbageCollector,
+    ): void {
+        if ($this->previewOnly && filled($origin->path)) {
+            $metadata = is_array($origin->metadata) ? $origin->metadata : [];
+            $origin->update([
+                'preview_failed_at' => now(),
+                'metadata' => array_merge($metadata, [
+                    'preview_download_error' => 'Исходное сообщение больше недоступно в Telegram.',
+                ]),
+            ]);
+            $this->syncClones($origin->fresh());
+
+            Log::notice('Telegram media preview is unavailable, keeping the downloaded media.', [
+                'media_asset_id' => $origin->id,
+                'source_message_id' => $origin->source_message_id,
+            ]);
+
+            return;
+        }
+
+        $result = DB::transaction(function () use ($origin, $mediaFileGarbageCollector): array {
+            $lockedOrigin = MediaAsset::query()
+                ->lockForUpdate()
+                ->find($origin->id);
+
+            if ($lockedOrigin === null) {
+                return ['removed_assets' => 0, 'paths' => []];
+            }
+
+            $mediaAssets = MediaAsset::query()
+                ->where(fn ($query) => $query
+                    ->whereKey($lockedOrigin->id)
+                    ->orWhere('origin_media_asset_id', $lockedOrigin->id))
+                ->get(['id', 'disk', 'path', 'preview_disk', 'preview_path']);
+            $paths = $mediaFileGarbageCollector->pathsFor($mediaAssets);
+
+            MediaAsset::query()
+                ->where('origin_media_asset_id', $lockedOrigin->id)
+                ->delete();
+            $lockedOrigin->delete();
+
+            return [
+                'removed_assets' => $mediaAssets->count(),
+                'paths' => $paths,
+            ];
+        });
+        $deletedFiles = $mediaFileGarbageCollector->deleteUnreferenced($result['paths']);
+
+        Log::notice('Unavailable Telegram media was removed from publications.', [
+            'media_asset_id' => $origin->id,
+            'source_message_id' => $origin->source_message_id,
+            'removed_assets' => $result['removed_assets'],
+            'deleted_files' => $deletedFiles,
+        ]);
     }
 
     private function syncClones(MediaAsset $origin): void

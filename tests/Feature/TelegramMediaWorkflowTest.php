@@ -18,6 +18,7 @@ use App\Models\User;
 use App\PlannedPostStatus;
 use App\Services\MadelineClientFactory;
 use App\Services\MadelineClientPool;
+use App\Services\MediaFileGarbageCollector;
 use App\Services\PlannedPostMediaManager;
 use App\Services\TelegramMessagePayloadFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -367,14 +368,149 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool);
-        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool);
+        (new DownloadMediaAssetJob($firstAsset->id))->handle($pool, app(MediaFileGarbageCollector::class));
+        (new DownloadMediaAssetJob($secondAsset->id))->handle($pool, app(MediaFileGarbageCollector::class));
 
         $this->assertNotNull($firstAsset->fresh()->path);
         $this->assertNotNull($secondAsset->fresh()->path);
         Storage::disk('local')->assertExists($firstAsset->fresh()->path);
         Storage::disk('local')->assertExists($secondAsset->fresh()->path);
         $this->assertSame([100, 101], $downloadedMessageIds);
+    }
+
+    public function test_download_job_removes_permanently_unavailable_media_from_planned_posts(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/previews/unavailable.jpg', 'preview');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Удалённое видео',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $origin = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'preview_path' => 'telegram/previews/unavailable.jpg',
+            'preview_disk' => 'local',
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $firstPlannedPost = PlannedPost::factory()->create();
+        $secondPlannedPost = PlannedPost::factory()->create();
+        $firstSelection = MediaAsset::factory()->for($firstPlannedPost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'origin_media_asset_id' => $origin->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'preview_path' => 'telegram/previews/unavailable.jpg',
+            'preview_disk' => 'local',
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $secondSelection = MediaAsset::factory()->for($secondPlannedPost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'origin_media_asset_id' => $origin->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'preview_path' => 'telegram/previews/unavailable.jpg',
+            'preview_disk' => 'local',
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturnNull();
+        $client->shouldNotReceive('downloadToFile');
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+
+        (new DownloadMediaAssetJob($origin->id))->handle(
+            $pool,
+            app(MediaFileGarbageCollector::class),
+        );
+
+        $this->assertModelMissing($origin);
+        $this->assertModelMissing($firstSelection);
+        $this->assertModelMissing($secondSelection);
+        $this->assertSame(0, $firstPlannedPost->mediaAssets()->count());
+        $this->assertSame(0, $secondPlannedPost->mediaAssets()->count());
+        Storage::disk('local')->assertMissing('telegram/previews/unavailable.jpg');
+    }
+
+    public function test_missing_preview_source_keeps_an_already_downloaded_video(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/media/video.mp4', 'video');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 100,
+            'text' => 'Скачанное видео',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $origin = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Video,
+            'path' => 'telegram/media/video.mp4',
+            'preview_path' => null,
+            'preview_downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $plannedPost = PlannedPost::factory()->create();
+        $selection = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'origin_media_asset_id' => $origin->id,
+            'type' => MediaType::Video,
+            'path' => 'telegram/media/video.mp4',
+            'preview_path' => null,
+            'preview_downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with(-100123, 100)
+            ->andReturn(['_' => 'message', 'id' => 100]);
+        $client->shouldNotReceive('downloadToFile');
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldReceive('make')->once()->andReturn($client);
+        $pool = new MadelineClientPool($factory);
+
+        (new DownloadMediaAssetJob($origin->id, previewOnly: true))->handle(
+            $pool,
+            app(MediaFileGarbageCollector::class),
+        );
+
+        $this->assertModelExists($origin);
+        $this->assertModelExists($selection);
+        $this->assertNotNull($origin->fresh()->preview_failed_at);
+        $this->assertNotNull($selection->fresh()->preview_failed_at);
+        $this->assertSame('telegram/media/video.mp4', $selection->fresh()->path);
+        Storage::disk('local')->assertExists('telegram/media/video.mp4');
     }
 
     public function test_download_job_removes_partial_file_after_telegram_cdn_failure(): void
@@ -427,7 +563,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $pool = new MadelineClientPool($factory);
 
         try {
-            (new DownloadMediaAssetJob($asset->id))->handle($pool);
+            (new DownloadMediaAssetJob($asset->id))->handle($pool, app(MediaFileGarbageCollector::class));
             $this->fail('The Telegram CDN failure should be propagated for a queued retry.');
         } catch (\RuntimeException $exception) {
             $this->assertSame('VOLUME_LOC_NOT_FOUND', $exception->getMessage());
@@ -496,7 +632,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        (new DownloadMediaAssetJob($asset->id))->handle($pool);
+        (new DownloadMediaAssetJob($asset->id))->handle($pool, app(MediaFileGarbageCollector::class));
 
         $asset->refresh();
         $selectedAsset->refresh();
@@ -556,7 +692,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $factory->shouldReceive('make')->once()->andReturn($client);
         $pool = new MadelineClientPool($factory);
 
-        (new DownloadMediaAssetJob($asset->id))->handle($pool);
+        (new DownloadMediaAssetJob($asset->id))->handle($pool, app(MediaFileGarbageCollector::class));
 
         $asset->refresh();
         $this->assertNotNull($asset->path);
@@ -618,7 +754,7 @@ class TelegramMediaWorkflowTest extends TestCase
         );
 
         try {
-            (new DownloadMediaAssetJob($asset->id))->handle($pool);
+            (new DownloadMediaAssetJob($asset->id))->handle($pool, app(MediaFileGarbageCollector::class));
         } finally {
             restore_error_handler();
         }
@@ -666,7 +802,10 @@ class TelegramMediaWorkflowTest extends TestCase
             'mime_type' => 'video/mp4',
         ]);
 
-        (new DownloadMediaAssetJob($selectedAsset->id))->handle(app(MadelineClientPool::class));
+        (new DownloadMediaAssetJob($selectedAsset->id))->handle(
+            app(MadelineClientPool::class),
+            app(MediaFileGarbageCollector::class),
+        );
 
         $selectedAsset->refresh();
         $this->assertSame('telegram/video.mp4', $selectedAsset->path);
