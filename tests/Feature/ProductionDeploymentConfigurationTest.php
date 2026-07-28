@@ -30,22 +30,29 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $makefile = File::get(base_path('Makefile'));
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
 
-        $stopWorkersPosition = strpos($deploy, 'stop --timeout 370 $(DEPLOY_WORKER_SERVICES)');
+        $pauseHorizonPosition = strpos($deploy, 'exec horizon php artisan horizon:pause');
+        $stopHorizonPosition = strpos($deploy, 'stop --timeout 370 horizon');
+        $stopMadelinePosition = strpos($deploy, 'stop --timeout 120 scheduler madeline');
         $composerInstallPosition = strpos($deploy, 'composer install');
         $composerReinstallPosition = strpos($deploy, 'composer reinstall amphp/postgres');
         $reconcilePosition = strpos($deploy, '$(MAKE) reconcile-containers');
 
-        $this->assertIsInt($stopWorkersPosition);
+        $this->assertIsInt($pauseHorizonPosition);
+        $this->assertIsInt($stopHorizonPosition);
+        $this->assertIsInt($stopMadelinePosition);
         $this->assertIsInt($composerInstallPosition);
         $this->assertIsInt($composerReinstallPosition);
         $this->assertIsInt($reconcilePosition);
-        $this->assertTrue($stopWorkersPosition < $composerInstallPosition);
+        $this->assertTrue($pauseHorizonPosition < $stopHorizonPosition);
+        $this->assertTrue($stopHorizonPosition < $stopMadelinePosition);
+        $this->assertTrue($stopMadelinePosition < $composerInstallPosition);
         $this->assertTrue($composerInstallPosition < $composerReinstallPosition);
         $this->assertTrue($composerReinstallPosition < $reconcilePosition);
         $this->assertStringContainsString(
             'up -d $(DEPLOY_WORKER_SERVICES) >/dev/null 2>&1 || true',
             $deploy,
         );
+        $this->assertSame(1, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
     }
 
     public function test_cli_workers_override_the_frankenphp_http_healthcheck(): void
