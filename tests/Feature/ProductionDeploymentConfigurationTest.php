@@ -63,4 +63,11 @@ class ProductionDeploymentConfigurationTest extends TestCase
             $madeline,
         );
     }
+
+    public function test_production_does_not_run_the_unused_typesense_service(): void
+    {
+        $compose = File::get(base_path('docker-compose.production.yml'));
+
+        $this->assertStringNotContainsString('typesense', $compose);
+    }
 }
