@@ -63,6 +63,10 @@ class MadelineSettingsFactory
         return $directory.'/'.$account->uuid;
     }
 
+    /**
+     * @param  positive-int  $default
+     * @return positive-int
+     */
     private function positiveIntegerConfig(string $key, int $default): int
     {
         $value = (int) config($key, $default);
