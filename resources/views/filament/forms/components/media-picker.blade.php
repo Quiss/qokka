@@ -3,16 +3,28 @@
     $media = $assets
         ->map(function (\App\Models\MediaAsset $asset): array {
             $isVideo = $asset->type === \App\MediaType::Video;
+            $isAnimation = $asset->type === \App\MediaType::Animation;
 
             return [
                 'id' => (string) $asset->id,
-                'type' => $isVideo ? 'video' : 'photo',
-                'type_label' => $isVideo ? 'Видео' : 'Фото',
+                'type' => match ($asset->type) {
+                    \App\MediaType::Video => 'video',
+                    \App\MediaType::Animation => 'animation',
+                    default => 'photo',
+                },
+                'type_label' => match ($asset->type) {
+                    \App\MediaType::Video => 'Видео',
+                    \App\MediaType::Animation => 'GIF',
+                    default => 'Фото',
+                },
                 'source_label' => (string) $asset->getAttribute('source_label'),
                 'source_url' => $asset->getAttribute('source_url'),
                 'preview_url' => $asset->previewUrl(),
-                'download_url' => $isVideo ? $asset->downloadUrl() : null,
-                'mime_type' => $asset->mime_type ?: ($isVideo ? 'video/mp4' : 'image/jpeg'),
+                'download_url' => $isVideo || $isAnimation ? $asset->downloadUrl() : null,
+                'mime_type' => $asset->mime_type ?: match ($asset->type) {
+                    \App\MediaType::Video, \App\MediaType::Animation => 'video/mp4',
+                    default => 'image/jpeg',
+                },
                 'size_label' => $asset->size_bytes === null
                     ? 'Размер неизвестен'
                     : number_format($asset->size_bytes / 1024 / 1024, 1, ',', ' ').' МБ',
@@ -39,6 +51,17 @@
             },
             asset(id) {
                 return this.assets.find((asset) => asset.id === String(id))
+            },
+            canSelect(asset) {
+                const selectedAssets = (this.state ?? [])
+                    .map((id) => this.asset(id))
+                    .filter(Boolean)
+
+                if (asset.type === 'animation') {
+                    return selectedAssets.length === 0 || this.isSelected(asset.id)
+                }
+
+                return ! selectedAssets.some((selectedAsset) => selectedAsset.type === 'animation')
             },
             remove(id) {
                 if (this.disabled) {
@@ -135,7 +158,7 @@
 
         @if ($media->isEmpty())
             <div class="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-600 dark:border-white/15 dark:text-gray-300">
-                В источниках этой новости нет доступных фото или видео.
+                В источниках этой новости нет доступных фото, видео или GIF.
             </div>
         @else
             <section>
@@ -161,15 +184,22 @@
                                 type="checkbox"
                                 value="{{ $item['id'] }}"
                                 x-model="state"
-                                x-bind:disabled="disabled || (! isSelected(@js($item['id'])) && (state ?? []).length >= 10)"
+                                x-bind:disabled="disabled || ! canSelect(@js($item)) || (! isSelected(@js($item['id'])) && (state ?? []).length >= 10)"
                                 class="sr-only"
                             >
 
                             <div class="h-24 bg-gray-100 dark:bg-gray-800">
-                                @if ($item['type'] === 'video' && filled($item['download_url']))
+                                @if ($item['type'] === 'animation' && filled($item['download_url']) && str_starts_with($item['mime_type'], 'image/'))
+                                    <img
+                                        class="h-full w-full object-cover"
+                                        src="{{ $item['download_url'] }}"
+                                        alt="{{ $item['type_label'] }} из источника {{ $item['source_label'] }}"
+                                        loading="lazy"
+                                    >
+                                @elseif (in_array($item['type'], ['video', 'animation'], true) && filled($item['download_url']))
                                     <video
                                         class="h-full w-full object-cover"
-                                        controls
+                                        @if ($item['type'] === 'video') controls @else autoplay loop muted playsinline @endif
                                         preload="metadata"
                                         x-on:click.stop
                                     >

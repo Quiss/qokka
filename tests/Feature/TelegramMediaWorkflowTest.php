@@ -247,6 +247,34 @@ class TelegramMediaWorkflowTest extends TestCase
         );
     }
 
+    public function test_animation_cannot_be_mixed_with_other_selected_media(): void
+    {
+        $plan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $photo = MediaAsset::factory()->for($sourcePost, 'mediable')->create();
+        $animation = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Animation,
+        ]);
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+
+        try {
+            app(PlannedPostMediaManager::class)->replaceSelection($post, [$photo->id, $animation->id]);
+            $this->fail('An animation mixed with other media should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['GIF-анимацию можно публиковать только отдельно от других медиа.'],
+                $exception->errors()['media_asset_ids'],
+            );
+        }
+
+        $this->assertDatabaseCount('media_assets', 2);
+    }
+
     public function test_oversized_media_error_shows_file_size_and_configured_limit(): void
     {
         config(['services.telegram.media_max_bytes' => 300 * 1024 * 1024]);

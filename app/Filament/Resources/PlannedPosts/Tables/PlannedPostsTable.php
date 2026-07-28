@@ -143,8 +143,8 @@ class PlannedPostsTable
                             ->disabled(fn (PlannedPost $record): bool => self::isImmutable($record))
                             ->columnSpanFull(),
                         ViewField::make('media_asset_ids')
-                            ->label('Какие фото и видео пойдут в публикацию')
-                            ->helperText('Нажмите на карточки, чтобы выбрать файлы. В верхнем списке перетащите выбранные медиа в нужном порядке. Максимум 10.')
+                            ->label('Какие фото, видео и GIF пойдут в публикацию')
+                            ->helperText('Нажмите на карточки, чтобы выбрать файлы. GIF публикуется отдельно от других медиа. В верхнем списке перетащите выбранные медиа в нужном порядке. Максимум 10.')
                             ->view('filament.forms.components.media-picker')
                             ->viewData(fn (PlannedPost $record, PlannedPostMediaManager $mediaManager): array => [
                                 'assets' => $mediaManager->availableAssets($record),

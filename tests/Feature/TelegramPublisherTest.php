@@ -113,6 +113,54 @@ class TelegramPublisherTest extends TestCase
             && $request->hasFile('thumbnail', 'preview', 'preview.jpg'));
     }
 
+    public function test_animation_is_sent_as_a_telegram_animation(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('telegram/animation.mp4', 'animation');
+        config([
+            'services.telegram.bot_token' => 'test-token',
+            'services.telegram.bot_api_url' => 'https://tgprx.orangepanda.ru/',
+        ]);
+        Http::fake([
+            'https://tgprx.orangepanda.ru/bottest-token/sendAnimation' => Http::response([
+                'ok' => true,
+                'result' => ['message_id' => 987],
+            ]),
+        ]);
+        $publication = Publication::factory()->create();
+        $destination = Destination::factory()->create(['publication_id' => $publication->id, 'external_id' => '@poka_trend']);
+        $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+            'text' => '**GIF дня**',
+        ]);
+        MediaAsset::factory()->for($post, 'mediable')->create([
+            'type' => MediaType::Animation,
+            'path' => 'telegram/animation.mp4',
+            'mime_type' => 'video/mp4',
+            'metadata' => [
+                'width' => 640,
+                'height' => 360,
+                'duration' => 5,
+            ],
+        ]);
+        $delivery = Delivery::factory()->create(['planned_post_id' => $post->id, 'destination_id' => $destination->id]);
+
+        $result = app(TelegramPublisher::class)->publish($delivery);
+
+        $this->assertSame(['987'], $result['message_ids']);
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://tgprx.orangepanda.ru/bottest-token/sendAnimation'
+            && $this->multipartValue($request, 'chat_id') === '@poka_trend'
+            && $this->multipartValue($request, 'caption') === '<b>GIF дня</b>'
+            && $this->multipartValue($request, 'parse_mode') === 'HTML'
+            && (int) $this->multipartValue($request, 'width') === 640
+            && (int) $this->multipartValue($request, 'height') === 360
+            && (int) $this->multipartValue($request, 'duration') === 5
+            && $request->hasFile('animation', 'animation', 'animation.mp4'));
+    }
+
     public function test_telegram_client_uses_configured_publish_timeouts(): void
     {
         config([

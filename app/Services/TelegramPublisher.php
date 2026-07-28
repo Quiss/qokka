@@ -70,7 +70,7 @@ class TelegramPublisher implements Publisher
         $plannedPost = $delivery->plannedPost;
         $text = trim((string) $plannedPost->text);
         $selectedMedia = $plannedPost->mediaAssets
-            ->whereIn('type', [MediaType::Photo, MediaType::Video])
+            ->whereIn('type', MediaType::publishableCases())
             ->take(10)
             ->values();
         $maxBytes = (int) config('services.telegram.media_max_bytes', 50 * 1024 * 1024);
@@ -89,6 +89,10 @@ class TelegramPublisher implements Publisher
             throw new RuntimeException('Выбранное медиа превышает лимит Telegram 50 МБ.');
         }
 
+        if ($selectedMedia->count() > 1 && $selectedMedia->contains('type', MediaType::Animation)) {
+            throw new RuntimeException('GIF-анимацию можно публиковать только отдельно от других медиа.');
+        }
+
         $media = $selectedMedia;
         $messageIds = [];
 
@@ -103,8 +107,12 @@ class TelegramPublisher implements Publisher
 
         if ($media->count() === 1) {
             $asset = $media->first();
-            $field = $asset->type === MediaType::Photo ? 'photo' : 'video';
-            $method = $asset->type === MediaType::Photo ? 'sendPhoto' : 'sendVideo';
+            [$field, $method] = match ($asset->type) {
+                MediaType::Photo => ['photo', 'sendPhoto'],
+                MediaType::Video => ['video', 'sendVideo'],
+                MediaType::Animation => ['animation', 'sendAnimation'],
+                default => throw new RuntimeException('Unsupported Telegram media type.'),
+            };
             $request = $this->client()
                 ->attach($field, Storage::disk($asset->disk)->get($asset->path), basename($asset->path));
             $payload = [
@@ -113,8 +121,8 @@ class TelegramPublisher implements Publisher
                 'parse_mode' => $caption !== '' ? 'HTML' : null,
             ];
 
-            if ($asset->type === MediaType::Video) {
-                $payload = array_merge($payload, $this->videoPayload($asset));
+            if (in_array($asset->type, [MediaType::Video, MediaType::Animation], true)) {
+                $payload = array_merge($payload, $this->movingMediaPayload($asset));
                 $this->attachThumbnail($request, $asset, 'thumbnail', $payload);
             }
 
@@ -137,7 +145,7 @@ class TelegramPublisher implements Publisher
                 ];
 
                 if ($asset->type === MediaType::Video) {
-                    $item = array_merge($item, $this->videoPayload($asset));
+                    $item = array_merge($item, $this->movingMediaPayload($asset));
                     $this->attachThumbnail($request, $asset, 'thumbnail_'.$index, $item);
                 }
 
@@ -205,7 +213,7 @@ class TelegramPublisher implements Publisher
     }
 
     /** @return array<string, int|bool> */
-    private function videoPayload(MediaAsset $asset): array
+    private function movingMediaPayload(MediaAsset $asset): array
     {
         $metadata = is_array($asset->metadata) ? $asset->metadata : [];
         $payload = [];
@@ -216,7 +224,7 @@ class TelegramPublisher implements Publisher
             }
         }
 
-        if (($metadata['supports_streaming'] ?? false) === true) {
+        if ($asset->type === MediaType::Video && ($metadata['supports_streaming'] ?? false) === true) {
             $payload['supports_streaming'] = true;
         }
 

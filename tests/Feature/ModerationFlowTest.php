@@ -10,8 +10,10 @@ use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\DeliveryStatus;
 use App\Jobs\RewritePlannedPostJob;
+use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\Destination;
+use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
 use App\Models\SourcePost;
@@ -96,6 +98,35 @@ class ModerationFlowTest extends TestCase
             'story_candidate_id' => $candidate->id,
             'status' => PlannedPostStatus::Rewriting->value,
         ]);
+        Queue::assertPushed(RewritePlannedPostJob::class);
+    }
+
+    public function test_plan_approval_copies_an_animation_from_the_primary_source(): void
+    {
+        Queue::fake();
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'slot_schedule' => [now()->addDay()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $animation = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Animation,
+        ]);
+
+        $builtPlan = app(BuildContentPlan::class)->handle($plan);
+
+        $plannedPost = $builtPlan->plannedPosts->sole();
+
+        $this->assertSame(ContentPlanStatus::Rewriting, $builtPlan->status);
+        $this->assertSame(
+            [$animation->id],
+            $plannedPost->mediaAssets()->pluck('origin_media_asset_id')->all(),
+        );
         Queue::assertPushed(RewritePlannedPostJob::class);
     }
 

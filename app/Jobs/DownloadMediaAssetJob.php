@@ -233,6 +233,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 
         return match ($asset->mime_type) {
             'image/jpeg' => 'jpg',
+            'image/gif' => 'gif',
             'image/png' => 'png',
             'video/mp4' => 'mp4',
             default => $asset->type === MediaType::Photo ? 'jpg' : 'bin',

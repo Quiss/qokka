@@ -203,7 +203,7 @@ class GenerateCandidateBatch
         }
 
         $hasPublishableMedia = $sourcePost->mediaAssets
-            ->whereIn('type', [MediaType::Photo, MediaType::Video])
+            ->whereIn('type', MediaType::publishableCases())
             ->isNotEmpty();
 
         return ($hasPublishableMedia ? 1_000_000_000 : 0)

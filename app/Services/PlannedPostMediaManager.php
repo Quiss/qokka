@@ -30,6 +30,7 @@ class PlannedPostMediaManager
         }
 
         $sourceAssetIds = $primarySource->mediaAssets
+            ->whereIn('type', MediaType::publishableCases())
             ->map(fn (MediaAsset $mediaAsset): int => $mediaAsset->id)
             ->values()
             ->all();
@@ -49,7 +50,7 @@ class PlannedPostMediaManager
         $plannedPost->loadMissing('storyCandidate.sourcePosts.mediaAssets');
         $allowedAssets = $plannedPost->storyCandidate->sourcePosts
             ->flatMap->mediaAssets
-            ->whereIn('type', [MediaType::Photo, MediaType::Video])
+            ->whereIn('type', MediaType::publishableCases())
             ->keyBy('id');
         $selectedAssets = collect($sourceAssetIds)
             ->unique()
@@ -60,6 +61,12 @@ class PlannedPostMediaManager
         if ($selectedAssets->count() !== collect($sourceAssetIds)->unique()->count()) {
             throw ValidationException::withMessages([
                 'media_asset_ids' => 'Выбрано медиа, которое не относится к источникам этой новости.',
+            ]);
+        }
+
+        if ($selectedAssets->count() > 1 && $selectedAssets->contains('type', MediaType::Animation)) {
+            throw ValidationException::withMessages([
+                'media_asset_ids' => 'GIF-анимацию можно публиковать только отдельно от других медиа.',
             ]);
         }
 
@@ -176,7 +183,7 @@ class PlannedPostMediaManager
                     return $asset;
                 });
             })
-            ->whereIn('type', [MediaType::Photo, MediaType::Video])
+            ->whereIn('type', MediaType::publishableCases())
             ->values();
     }
 }
