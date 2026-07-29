@@ -7,6 +7,7 @@ namespace App\Telegram;
 use Amp\Http\Client\HttpClient;
 use Amp\Http\Client\HttpClientBuilder;
 use Amp\Http\Client\Request;
+use App\Services\MadelineOwnerLease;
 use danog\MadelineProto\EventHandler\Attributes\Cron;
 use danog\MadelineProto\EventHandler\Attributes\Handler;
 use danog\MadelineProto\EventHandler\Channel\MessageForwards;
@@ -19,8 +20,6 @@ use danog\MadelineProto\EventHandler\Media\Photo;
 use danog\MadelineProto\EventHandler\Media\Video;
 use danog\MadelineProto\EventHandler\Message\ChannelMessage;
 use danog\MadelineProto\SimpleEventHandler;
-use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -32,11 +31,31 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
 
     private int $subscriptionsRefreshedAt = 0;
 
+    private int $ownerHeartbeatAt = 0;
+
     private static ?HttpClient $bridgeHttpClient = null;
 
     public function onStart(): void
     {
+        $this->heartbeatOwner();
         $this->refreshSubscriptions();
+    }
+
+    #[Cron(period: 5.0)]
+    public function heartbeatOwner(): void
+    {
+        $now = time();
+        $heartbeatInterval = max(
+            5,
+            (int) config('services.telegram.owner_heartbeat_seconds', 15),
+        );
+
+        if ($this->ownerHeartbeatAt !== 0 && ($now - $this->ownerHeartbeatAt) < $heartbeatInterval) {
+            return;
+        }
+
+        app(MadelineOwnerLease::class)->heartbeat($this->telegramAccountUuid());
+        $this->ownerHeartbeatAt = $now;
     }
 
     #[Cron(period: 60.0)]
@@ -128,8 +147,6 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
             default => 'document',
         };
         $extension = ltrim($media->fileExt ?: '', '.') ?: 'bin';
-        $relativePath = 'telegram/'.date('Y/m', $message->date).'/'.Str::uuid().'.'.$extension;
-        $absolutePath = Storage::disk('local')->path($relativePath);
         $externalId = $this->mediaExternalId($media);
         $metadata = array_filter([
             'bot_api_file_id' => $media->botApiFileId,
@@ -140,39 +157,13 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
             'duration' => property_exists($media, 'duration') ? $media->duration : null,
         ], static fn (mixed $value): bool => $value !== null);
 
-        if (in_array($type, ['video', 'animation'], true)) {
-            return [[
-                'type' => $type,
-                'external_id' => $externalId,
-                'mime_type' => $media->mimeType,
-                'size_bytes' => $media->size,
-                'metadata' => $metadata,
-            ]];
-        }
-
-        try {
-            File::ensureDirectoryExists(dirname($absolutePath));
-            $media->downloadToFile($absolutePath);
-
-            return [[
-                'type' => $type,
-                'external_id' => $externalId,
-                'disk' => 'local',
-                'path' => $relativePath,
-                'mime_type' => $media->mimeType,
-                'size_bytes' => $media->size,
-                'checksum' => hash_file('sha256', $absolutePath),
-                'metadata' => $metadata,
-            ]];
-        } catch (Throwable $exception) {
-            return [[
-                'type' => $type,
-                'external_id' => $externalId,
-                'mime_type' => $media->mimeType,
-                'size_bytes' => $media->size,
-                'metadata' => array_merge($metadata, ['download_error' => $exception->getMessage()]),
-            ]];
-        }
+        return [[
+            'type' => $type,
+            'external_id' => $externalId,
+            'mime_type' => $media->mimeType,
+            'size_bytes' => $media->size,
+            'metadata' => array_merge($metadata, ['file_extension' => $extension]),
+        ]];
     }
 
     private function mediaExternalId(TelegramMedia $media): string

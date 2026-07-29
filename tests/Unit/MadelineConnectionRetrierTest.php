@@ -2,6 +2,8 @@
 
 namespace Tests\Unit;
 
+use Amp\CancelledException;
+use Amp\TimeoutException;
 use App\Services\MadelineConnectionRetrier;
 use AssertionError;
 use PHPUnit\Framework\TestCase;
@@ -73,6 +75,26 @@ class MadelineConnectionRetrierTest extends TestCase
         );
 
         $this->assertSame('Could not connect to DC 2.0!', $retrier->reason($exception));
+    }
+
+    public function test_it_retries_amp_timeout_cancellations(): void
+    {
+        $retrier = new MadelineConnectionRetrierFake;
+        $attempts = 0;
+
+        $retrier->run(
+            function () use (&$attempts): void {
+                $attempts++;
+
+                if ($attempts === 1) {
+                    throw new CancelledException(new TimeoutException);
+                }
+            },
+            static function (): void {},
+        );
+
+        $this->assertSame(2, $attempts);
+        $this->assertSame([5], $retrier->pauses);
     }
 }
 

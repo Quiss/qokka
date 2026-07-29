@@ -2,10 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Exceptions\MadelineOwnerUnavailableException;
 use App\Models\TelegramAccount;
 use App\Services\MadelineApiFactory;
 use App\Services\MadelineConnectionRetrier;
 use App\Services\MadelineListenerSupervisor;
+use App\Services\MadelineOwnerLease;
 use App\Services\MadelineProtoListenerSession;
 use App\Telegram\ChannelSourceEventHandler;
 use App\TelegramAccountStatus;
@@ -26,6 +28,7 @@ class TelegramListenCommand extends Command
         MadelineApiFactory $apiFactory,
         MadelineConnectionRetrier $connectionRetrier,
         MadelineListenerSupervisor $listenerSupervisor,
+        MadelineOwnerLease $ownerLease,
     ): int {
         if ((string) config('services.telegram.bridge_secret') === '') {
             $this->error('TELEGRAM_BRIDGE_SECRET не настроен. Укажите общий секрет для listener и HTTP bridge.');
@@ -48,10 +51,14 @@ class TelegramListenCommand extends Command
         $this->info("Запускаю Telegram listener для аккаунтов: {$accounts->pluck('name')->join(', ')}.");
 
         $connectionRetrier->run(
-            function () use ($accounts, $apiFactory, $listenerSupervisor): void {
+            function () use ($accounts, $apiFactory, $listenerSupervisor, $ownerLease): void {
                 $sessions = $accounts
                     ->mapWithKeys(fn (TelegramAccount $account): array => [
-                        $account->uuid => new MadelineProtoListenerSession($apiFactory->make($account)),
+                        $account->uuid => new MadelineProtoListenerSession(
+                            $apiFactory->makeOwner($account),
+                            $account->uuid,
+                            $ownerLease,
+                        ),
                     ])
                     ->all();
                 $remoteAccounts = $accounts
@@ -67,7 +74,14 @@ class TelegramListenCommand extends Command
 
                 try {
                     $listenerSupervisor->run($sessions, ChannelSourceEventHandler::class);
+
+                    throw new MadelineOwnerUnavailableException(
+                        'MadelineProto listener loop stopped unexpectedly.',
+                    );
                 } finally {
+                    $accounts->each(function (TelegramAccount $account) use ($ownerLease): void {
+                        $ownerLease->release($account->uuid);
+                    });
                     unset($sessions);
                     gc_collect_cycles();
                     API::finalize();

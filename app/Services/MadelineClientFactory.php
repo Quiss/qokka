@@ -11,6 +11,6 @@ class MadelineClientFactory
 
     public function make(TelegramAccount $account): MadelineClient
     {
-        return new MadelineProtoClient($this->apiFactory->make($account));
+        return new MadelineProtoClient($this->apiFactory->makeIpcClient($account));
     }
 }

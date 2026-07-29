@@ -2,8 +2,12 @@
 
 namespace App\Services;
 
+use Amp\CancelledException;
 use Amp\Socket\ConnectException;
+use Amp\TimeoutException;
+use App\Exceptions\MadelineOwnerUnavailableException;
 use Closure;
+use Illuminate\Support\Str;
 use Throwable;
 
 class MadelineConnectionRetrier
@@ -55,7 +59,16 @@ class MadelineConnectionRetrier
         do {
             if (
                 $exception instanceof ConnectException
-                || str_contains($exception->getMessage(), 'Could not connect to DC ')
+                || $exception instanceof CancelledException
+                || $exception instanceof TimeoutException
+                || $exception instanceof MadelineOwnerUnavailableException
+                || Str::contains($exception->getMessage(), [
+                    'Could not connect to DC ',
+                    'Could not connect to MadelineProto',
+                    'operation was cancelled',
+                    'Operation timed out',
+                    'Timeout during session unserialization',
+                ], ignoreCase: true)
             ) {
                 return $exception;
             }

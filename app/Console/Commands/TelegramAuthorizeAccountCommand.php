@@ -27,7 +27,7 @@ class TelegramAuthorizeAccountCommand extends Command
         $this->line('Если QR недоступен, MadelineProto предложит вход по телефону и коду.');
 
         try {
-            $api = $apiFactory->make($account);
+            $api = $apiFactory->makeOwner($account);
             $api->start();
             $self = $api->getSelf();
 

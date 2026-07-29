@@ -15,6 +15,7 @@ GID := $(shell id -g)
 PWD := $(shell pwd)
 PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
 PUBLISH_DRAIN_TIMEOUT ?= 620
+MEDIA_DOWNLOAD_DRAIN_TIMEOUT ?= 430
 PUBLISH_QUEUE ?= redis:publish
 TELEGRAM_QUEUE ?= redis:telegram
 MEDIA_DOWNLOAD_HIGH_QUEUE ?= redis:media-download-high
@@ -40,18 +41,22 @@ first:
 	fi
 deploy:
 	@set -eu; \
-	trap '$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:continue >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_HIGH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
+	DEPLOY_READY=0; \
+	trap 'if [ "$$DEPLOY_READY" -ne 1 ]; then echo "Deploy failed before MadelineProto readiness; queues remain paused."; fi' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:pause; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
+	$(PRODUCTION_COMPOSE) exec app php artisan telegram:wait-for-media-downloads --timeout=$(MEDIA_DOWNLOAD_DRAIN_TIMEOUT); \
+	$(PRODUCTION_COMPOSE) stop --timeout 120 madeline; \
 	git pull; \
 	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
-	$(MAKE) reconcile-containers; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
+	$(MAKE) reconcile-containers; \
+	$(PRODUCTION_COMPOSE) exec madeline php artisan telegram:health --no-interaction; \
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
 	$(MAKE) restart-horizon; \
@@ -59,6 +64,7 @@ deploy:
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
+	DEPLOY_READY=1; \
 	trap - 0 1 2 15
 
 deploy-full: backup deploy
@@ -182,6 +188,7 @@ restart-scheduler:
 # Restart MadelineProto gracefully so sessions can be serialized
 restart-madeline:
 	$(PRODUCTION_COMPOSE) restart --timeout 120 madeline
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 madeline
 	@echo "MadelineProto listener restarted"
 
 # Restart all background workers

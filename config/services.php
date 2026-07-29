@@ -68,6 +68,13 @@ return [
         'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 300 * 1024 * 1024),
         'database_max_connections' => (int) env('TELEGRAM_DATABASE_MAX_CONNECTIONS', 20),
         'database_idle_timeout' => (int) env('TELEGRAM_DATABASE_IDLE_TIMEOUT', 300),
+        'download_parallel_chunks' => (int) env('TELEGRAM_DOWNLOAD_PARALLEL_CHUNKS', 4),
+        'rpc_drop_timeout' => (int) env('TELEGRAM_RPC_DROP_TIMEOUT', 60),
+        'owner_heartbeat_seconds' => (int) env('TELEGRAM_OWNER_HEARTBEAT_SECONDS', 15),
+        'owner_lease_ttl_seconds' => (int) env('TELEGRAM_OWNER_LEASE_TTL_SECONDS', 45),
+        'media_retry_window_seconds' => (int) env('TELEGRAM_MEDIA_RETRY_WINDOW_SECONDS', 43200),
+        'media_lock_seconds' => (int) env('TELEGRAM_MEDIA_LOCK_SECONDS', 420),
+        'coordination_cache_store' => env('TELEGRAM_COORDINATION_CACHE_STORE', 'redis'),
         'socks5' => [
             'host' => env('TELEGRAM_SOCKS5_HOST'),
             'port' => (int) env('TELEGRAM_SOCKS5_PORT', 1080),

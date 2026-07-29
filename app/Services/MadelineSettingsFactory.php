@@ -53,6 +53,14 @@ class MadelineSettingsFactory
         $settings->getAppInfo()
             ->setApiId((int) $apiId)
             ->setApiHash((string) $apiHash);
+        $settings->getFiles()->setDownloadParallelChunks($this->positiveIntegerConfig(
+            'services.telegram.download_parallel_chunks',
+            4,
+        ));
+        $settings->getRpc()->setRpcDropTimeout($this->positiveIntegerConfig(
+            'services.telegram.rpc_drop_timeout',
+            60,
+        ));
         $this->configureSocks5Proxy($settings);
 
         return $settings;

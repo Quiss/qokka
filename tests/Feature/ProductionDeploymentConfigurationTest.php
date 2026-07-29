@@ -25,7 +25,7 @@ class ProductionDeploymentConfigurationTest extends TestCase
                 $deploy,
             );
             $this->assertSame(
-                2,
+                1,
                 substr_count($deploy, "queue:continue \$({$queueVariable})"),
             );
         }
@@ -42,17 +42,20 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(['telegram'], $telegramSupervisor['queue']);
         $this->assertSame(3, $telegramSupervisor['maxProcesses']);
         $this->assertSame([DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE], $highPrioritySupervisor['queue']);
-        $this->assertSame(3, $highPrioritySupervisor['maxProcesses']);
+        $this->assertSame(2, $highPrioritySupervisor['maxProcesses']);
         $this->assertSame([DownloadMediaAssetJob::BACKGROUND_QUEUE], $backgroundSupervisor['queue']);
-        $this->assertSame(2, $backgroundSupervisor['maxProcesses']);
+        $this->assertSame(1, $backgroundSupervisor['maxProcesses']);
         $this->assertSame(360, $highPrioritySupervisor['timeout']);
         $this->assertSame(360, $backgroundSupervisor['timeout']);
         $this->assertIsInt($retryAfter);
+        $this->assertSame(0, $job->tries);
+        $this->assertSame(46800, $job->uniqueFor);
+        $this->assertGreaterThan(now()->addHours(11)->getTimestamp(), $job->retryUntil()->getTimestamp());
         $this->assertTrue($job->timeout < $highPrioritySupervisor['timeout']);
         $this->assertTrue($highPrioritySupervisor['timeout'] < $retryAfter);
     }
 
-    public function test_deploy_gracefully_terminates_horizon_without_stopping_worker_containers(): void
+    public function test_deploy_stops_madeline_before_updating_code_and_resumes_after_readiness(): void
     {
         $makefile = File::get(base_path('Makefile'));
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
@@ -63,26 +66,38 @@ class ProductionDeploymentConfigurationTest extends TestCase
         );
 
         $pauseHorizonPosition = strpos($deploy, 'exec horizon php artisan horizon:pause');
+        $waitForMediaPosition = strpos($deploy, 'telegram:wait-for-media-downloads');
+        $stopMadelinePosition = strpos($deploy, 'stop --timeout 120 madeline');
         $composerInstallPosition = strpos($deploy, 'composer install');
+        $migratePosition = strpos($deploy, 'artisan migrate --force');
         $reconcilePosition = strpos($deploy, '$(MAKE) reconcile-containers');
+        $healthPosition = strpos($deploy, 'exec madeline php artisan telegram:health');
         $restartHorizonPosition = strpos($deploy, '$(MAKE) restart-horizon');
         $continueTelegramPosition = strrpos($deploy, 'queue:continue $(TELEGRAM_QUEUE)');
 
         $this->assertIsInt($pauseHorizonPosition);
+        $this->assertIsInt($waitForMediaPosition);
+        $this->assertIsInt($stopMadelinePosition);
         $this->assertIsInt($composerInstallPosition);
+        $this->assertIsInt($migratePosition);
         $this->assertIsInt($reconcilePosition);
+        $this->assertIsInt($healthPosition);
         $this->assertIsInt($restartHorizonPosition);
         $this->assertIsInt($continueTelegramPosition);
-        $this->assertTrue($pauseHorizonPosition < $composerInstallPosition);
-        $this->assertTrue($composerInstallPosition < $reconcilePosition);
-        $this->assertTrue($reconcilePosition < $restartHorizonPosition);
+        $this->assertTrue($pauseHorizonPosition < $waitForMediaPosition);
+        $this->assertTrue($waitForMediaPosition < $stopMadelinePosition);
+        $this->assertTrue($stopMadelinePosition < $composerInstallPosition);
+        $this->assertTrue($composerInstallPosition < $migratePosition);
+        $this->assertTrue($migratePosition < $reconcilePosition);
+        $this->assertTrue($reconcilePosition < $healthPosition);
+        $this->assertTrue($healthPosition < $restartHorizonPosition);
         $this->assertTrue($restartHorizonPosition < $continueTelegramPosition);
         $this->assertStringContainsString('horizon:terminate', $restartHorizon);
-        $this->assertStringNotContainsString('$(PRODUCTION_COMPOSE) stop', $deploy);
+        $this->assertStringContainsString('queues remain paused', $deploy);
         $this->assertStringNotContainsString('composer reinstall amphp/postgres', $deploy);
         $this->assertStringNotContainsString('$(MAKE) restart-madeline', $deploy);
         $this->assertStringNotContainsString('$(MAKE) restart-all', $deploy);
-        $this->assertSame(1, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
+        $this->assertSame(0, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
     }
 
     public function test_cli_workers_override_the_frankenphp_http_healthcheck(): void
@@ -96,9 +111,10 @@ class ProductionDeploymentConfigurationTest extends TestCase
             $scheduler,
         );
         $this->assertStringContainsString(
-            "test: [\"CMD-SHELL\", \"pgrep -f '[p]hp artisan telegram:listen' > /dev/null\"]",
+            "pgrep -f '[p]hp artisan telegram:listen' > /dev/null && php artisan telegram:health --no-interaction",
             $madeline,
         );
+        $this->assertStringContainsString('start_period: 90s', $madeline);
     }
 
     public function test_production_does_not_run_the_unused_typesense_service(): void

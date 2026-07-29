@@ -14,6 +14,8 @@ use Throwable;
 
 /**
  * @property int $id
+ * @property int|null $source_message_id
+ * @property int|null $origin_media_asset_id
  * @property MediaType $type
  * @property string|null $ingest_key
  * @property string|null $external_id
@@ -26,6 +28,8 @@ use Throwable;
  * @property int|null $size_bytes
  * @property int $sort_order
  * @property array<string, mixed>|null $metadata
+ * @property-read SourceMessage|null $sourceMessage
+ * @property-read MediaAsset|null $originMediaAsset
  */
 #[Fillable(['mediable_type', 'mediable_id', 'source_message_id', 'origin_media_asset_id', 'ingest_key', 'external_id', 'type', 'disk', 'path', 'preview_disk', 'preview_path', 'preview_mime_type', 'mime_type', 'size_bytes', 'checksum', 'sort_order', 'metadata', 'downloaded_at', 'preview_downloaded_at', 'failed_at', 'preview_failed_at'])]
 class MediaAsset extends Model

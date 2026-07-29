@@ -10,6 +10,7 @@ use App\Actions\RecoverStaleDeliveryPublications;
 use App\ContentPlanStatus;
 use App\Contracts\OperationsNotifier;
 use App\DeliveryStatus;
+use App\Jobs\DownloadMediaAssetJob;
 use App\Jobs\GenerateCandidateBatchJob;
 use App\Jobs\PublishDeliveryJob;
 use App\Jobs\SendOperationsNotificationJob;
@@ -18,8 +19,10 @@ use App\Listeners\QueueFailedScheduledTaskOperationsNotification;
 use App\Models\ContentPlan;
 use App\Models\Delivery;
 use App\Models\Destination;
+use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
+use App\Models\SourcePost;
 use App\Models\StoryCandidate;
 use App\OperationsNotificationTopic;
 use App\PlannedPostStatus;
@@ -206,6 +209,51 @@ class OperationsTelegramNotificationTest extends TestCase
                 && in_array('Очередь: redis/ai', $job->details, true)
                 && in_array('Ошибка: OpenRouter недоступен', $job->details, true)
                 && str_ends_with($job->url, '/horizon/failed'),
+        );
+    }
+
+    public function test_failed_media_job_notification_uses_the_last_transport_error(): void
+    {
+        $this->configureOperationsNotifications();
+        Queue::fake();
+        $sourcePost = SourcePost::factory()->create();
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'path' => null,
+            'downloaded_at' => null,
+            'metadata' => [
+                'download_last_error' => [
+                    'code' => 'CancelledException',
+                    'message' => 'The operation was cancelled after the Telegram RPC timeout.',
+                    'telegram_account_id' => 7,
+                ],
+            ],
+        ]);
+        $downloadJob = new DownloadMediaAssetJob($asset->id);
+        $queueJob = Mockery::mock(QueueJob::class);
+        $queueJob->shouldReceive('resolveName')->once()->andReturn(DownloadMediaAssetJob::class);
+        $queueJob->shouldReceive('getQueue')->once()->andReturn('media-download-high');
+        $queueJob->shouldReceive('payload')->once()->andReturn([
+            'data' => ['command' => serialize($downloadJob)],
+        ]);
+
+        app(QueueFailedJobOperationsNotification::class)->handle(
+            new JobFailed(
+                'redis',
+                $queueJob,
+                new RuntimeException('DownloadMediaAssetJob has been attempted too many times.'),
+            ),
+        );
+
+        Queue::assertPushed(
+            SendOperationsNotificationJob::class,
+            fn (SendOperationsNotificationJob $job): bool => in_array(
+                'Ошибка: The operation was cancelled after the Telegram RPC timeout.',
+                $job->details,
+                true,
+            ) && collect($job->details)->contains(
+                fn (string $detail): bool => str_contains($detail, "Медиа: #{$asset->id}")
+                    && str_contains($detail, 'аккаунт: 7'),
+            ),
         );
     }
 

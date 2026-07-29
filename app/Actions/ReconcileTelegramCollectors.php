@@ -9,9 +9,11 @@ class ReconcileTelegramCollectors
 {
     public function __construct(private readonly AssignTelegramCollector $assignTelegramCollector) {}
 
-    public function handle(): int
+    /** @param (callable(): bool)|null $shouldStop */
+    public function handle(?callable $shouldStop = null): int
     {
         $reassigned = 0;
+        $shouldStop ??= static fn (): bool => false;
 
         SourceChannel::query()
             ->where('is_active', true)
@@ -21,7 +23,11 @@ class ReconcileTelegramCollectors
                 'telegramAccounts',
             ])
             ->orderBy('id')
-            ->each(function (SourceChannel $sourceChannel) use (&$reassigned): void {
+            ->each(function (SourceChannel $sourceChannel) use (&$reassigned, $shouldStop): ?bool {
+                if ($shouldStop()) {
+                    return false;
+                }
+
                 $current = $sourceChannel->collectorTelegramAccount;
                 $isCurrentUsable = $current !== null
                     && $current->isCollectorReady()
@@ -41,7 +47,7 @@ class ReconcileTelegramCollectors
                     );
 
                 if ($shouldKeepCurrent) {
-                    return;
+                    return null;
                 }
 
                 if ($shouldRetryPreferred) {
@@ -58,6 +64,8 @@ class ReconcileTelegramCollectors
                 if ($selected !== null && $selected->id !== $previousId) {
                     $reassigned++;
                 }
+
+                return null;
             });
 
         return $reassigned;

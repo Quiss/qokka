@@ -27,6 +27,22 @@ class MadelineSettingsFactoryTest extends TestCase
         $this->assertSame(Logger::NOTICE, $logger->getLevel());
     }
 
+    public function test_it_bounds_download_parallelism_and_keeps_the_rpc_timeout_explicit(): void
+    {
+        config([
+            'database.default' => 'pgsql',
+            'services.telegram.api_id' => 12345,
+            'services.telegram.api_hash' => 'test-api-hash',
+            'services.telegram.download_parallel_chunks' => 4,
+            'services.telegram.rpc_drop_timeout' => 60,
+        ]);
+        $account = new TelegramAccount(['uuid' => 'f20a0f22-49be-4996-b3b6-d37a42e36f99']);
+        $settings = app(MadelineSettingsFactory::class)->make($account);
+
+        $this->assertSame(4, $settings->getFiles()->getDownloadParallelChunks());
+        $this->assertSame(60, $settings->getRpc()->getRpcDropTimeout());
+    }
+
     public function test_it_uses_madeline_safe_database_pool_defaults(): void
     {
         config([

@@ -41,7 +41,7 @@ class IngestTelegramUpdate
             return null;
         }
 
-        return DB::transaction(function () use ($channel, $payload): ?SourcePost {
+        return DB::transaction(function () use ($account, $channel, $payload): ?SourcePost {
             SourceChannel::query()
                 ->whereKey($channel->id)
                 ->lockForUpdate()
@@ -92,6 +92,7 @@ class IngestTelegramUpdate
 
             if (! $isMetricsUpdate) {
                 $messageValues = array_merge($messageValues, [
+                    'telegram_account_id' => $account->id,
                     'telegram_grouped_id' => $payload['grouped_id'] ?? null,
                     'text' => $payload['text'] ?? null,
                     'entities' => $payload['entities'] ?? [],
@@ -149,7 +150,10 @@ class IngestTelegramUpdate
                 ]);
                 $asset->save();
 
-                if ($asset->path === null && $type === MediaType::Photo) {
+                if (
+                    $asset->path === null
+                    && in_array($type, [MediaType::Photo, MediaType::Animation, MediaType::Document], true)
+                ) {
                     $mediaJobs[] = [$asset->id, false];
                 } elseif ($asset->preview_path === null && $type === MediaType::Video && filled(data_get($asset->metadata, 'thumbnail_type'))) {
                     $mediaJobs[] = [$asset->id, true];
