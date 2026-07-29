@@ -36,6 +36,7 @@ class AssignTelegramCollector
 
             if (
                 $preferredAccount === null
+                && $ensureCurrentSubscription
                 && $retryUnavailablePreferred
                 && filled($sourceChannel->username)
             ) {
@@ -54,7 +55,13 @@ class AssignTelegramCollector
         foreach ($accounts as $account) {
             $isCurrentAccount = $sourceChannel->collector_telegram_account_id === $account->id;
 
-            if ($isCurrentAccount && ! $ensureCurrentSubscription) {
+            if (! $ensureCurrentSubscription) {
+                if (! $isCurrentAccount) {
+                    $sourceChannel->update([
+                        'collector_telegram_account_id' => $account->id,
+                    ]);
+                }
+
                 return $account;
             }
 

@@ -357,8 +357,31 @@ class TelegramCollectorAssignmentTest extends TestCase
         $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($stale));
     }
 
-    public function test_reconciliation_retries_a_failed_public_preferred_subscription_after_cooldown(): void
+    public function test_reconciliation_assigns_an_available_collector_without_calling_telegram(): void
     {
+        $account = $this->connectedAccount();
+        $sourceChannel = SourceChannel::factory()->create([
+            'username' => 'trendi',
+            'collector_telegram_account_id' => null,
+        ]);
+        $sourceChannel->telegramAccounts()->attach($account->id, [
+            'access_status' => TelegramSourceAccessStatus::Available,
+        ]);
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldNotReceive('make');
+        $reconciler = new ReconcileTelegramCollectors(
+            new AssignTelegramCollector(
+                new SubscribeTelegramCollectorToSource(new MadelineClientPool($factory)),
+            ),
+        );
+
+        $this->assertSame(1, $reconciler->handle());
+        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($account));
+    }
+
+    public function test_reconciliation_queues_a_failed_public_preferred_subscription_after_cooldown(): void
+    {
+        Queue::fake();
         $preferred = $this->connectedAccount();
         $backup = $this->connectedAccount();
         $sourceChannel = SourceChannel::factory()->create([
@@ -378,23 +401,13 @@ class TelegramCollectorAssignmentTest extends TestCase
                 'last_error' => null,
             ],
         ]);
-        $preferredClient = Mockery::mock(MadelineClient::class);
-        $preferredClient->shouldReceive('joinChannel')->once()->with('@trendi');
-        $preferredClient->shouldReceive('muteNotifications')->once()->with('@trendi');
-        $reconciler = new ReconcileTelegramCollectors(
-            $this->assignmentAction([$preferred->uuid => $preferredClient]),
+        $this->assertSame(0, app(ReconcileTelegramCollectors::class)->handle());
+        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($backup));
+        Queue::assertPushedOn(
+            'telegram',
+            VerifySourceChannelAccessJob::class,
+            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $sourceChannel->id,
         );
-
-        $this->assertSame(1, $reconciler->handle());
-
-        $preferredAccess = $sourceChannel->telegramAccounts()
-            ->whereKey($preferred->id)
-            ->firstOrFail()
-            ->pivot;
-
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($preferred));
-        $this->assertSame(TelegramSourceAccessStatus::Available->value, $preferredAccess->access_status);
-        $this->assertNull($preferredAccess->last_error);
     }
 
     public function test_verification_mode_rejoins_an_existing_public_collector(): void

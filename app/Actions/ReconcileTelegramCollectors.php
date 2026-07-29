@@ -2,6 +2,7 @@
 
 namespace App\Actions;
 
+use App\Jobs\VerifySourceChannelAccessJob;
 use App\Models\SourceChannel;
 
 class ReconcileTelegramCollectors
@@ -43,11 +44,14 @@ class ReconcileTelegramCollectors
                     return;
                 }
 
+                if ($shouldRetryPreferred) {
+                    VerifySourceChannelAccessJob::dispatch($sourceChannel->id)->onQueue('telegram');
+                }
+
                 $previousId = $sourceChannel->collector_telegram_account_id;
                 $selected = $this->assignTelegramCollector->handle(
                     $sourceChannel,
                     ensureCurrentSubscription: false,
-                    retryUnavailablePreferred: $shouldRetryPreferred,
                     clearWhenUnavailable: false,
                 );
 
