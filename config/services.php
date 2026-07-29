@@ -70,6 +70,7 @@ return [
         'database_idle_timeout' => (int) env('TELEGRAM_DATABASE_IDLE_TIMEOUT', 300),
         'download_parallel_chunks' => (int) env('TELEGRAM_DOWNLOAD_PARALLEL_CHUNKS', 4),
         'rpc_drop_timeout' => (int) env('TELEGRAM_RPC_DROP_TIMEOUT', 60),
+        'ipv6' => (bool) env('TELEGRAM_IPV6', false),
         'owner_heartbeat_seconds' => (int) env('TELEGRAM_OWNER_HEARTBEAT_SECONDS', 15),
         'owner_lease_ttl_seconds' => (int) env('TELEGRAM_OWNER_LEASE_TTL_SECONDS', 45),
         'media_lock_seconds' => (int) env('TELEGRAM_MEDIA_LOCK_SECONDS', 420),

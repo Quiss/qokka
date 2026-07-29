@@ -61,6 +61,7 @@ class MadelineSettingsFactory
             'services.telegram.rpc_drop_timeout',
             60,
         ));
+        $settings->getConnection()->setIpv6((bool) config('services.telegram.ipv6', false));
         $this->configureSocks5Proxy($settings);
 
         return $settings;

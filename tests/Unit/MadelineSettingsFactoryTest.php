@@ -43,6 +43,21 @@ class MadelineSettingsFactoryTest extends TestCase
         $this->assertSame(60, $settings->getRpc()->getRpcDropTimeout());
     }
 
+    public function test_it_disables_ipv6_connections_by_default(): void
+    {
+        config([
+            'database.default' => 'pgsql',
+            'services.telegram.api_id' => 12345,
+            'services.telegram.api_hash' => 'test-api-hash',
+            'services.telegram.ipv6' => false,
+        ]);
+        $account = new TelegramAccount(['uuid' => '48151079-c1f8-4190-87bd-1cc08611d6b9']);
+
+        $connection = app(MadelineSettingsFactory::class)->make($account)->getConnection();
+
+        $this->assertFalse($connection->getIpv6());
+    }
+
     public function test_it_uses_madeline_safe_database_pool_defaults(): void
     {
         config([
