@@ -7,33 +7,48 @@ use App\Services\MadelineListenerSupervisor;
 use App\Telegram\ChannelSourceEventHandler;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 
 class MadelineListenerSupervisorTest extends TestCase
 {
-    public function test_it_starts_only_sessions_without_a_running_event_handler(): void
+    public function test_it_prepares_every_session_and_starts_them_together(): void
     {
-        $runningSession = $this->fakeSession([true]);
-        $stoppedSession = $this->fakeSession([false]);
+        $firstSession = new MadelineListenerSessionFake;
+        $secondSession = new MadelineListenerSessionFake;
         $supervisor = $this->fakeSupervisor();
 
         $supervisor->run([
-            'running' => $runningSession,
-            'stopped' => $stoppedSession,
+            'first' => $firstSession,
+            'second' => $secondSession,
         ], ChannelSourceEventHandler::class);
 
-        $this->assertSame(['stopped'], array_keys($supervisor->startedSessions));
-        $this->assertSame(0, $supervisor->pauses);
+        $this->assertSame(['first', 'second'], array_keys($supervisor->startedSessions));
+        $this->assertSame(1, $firstSession->validations);
+        $this->assertSame(1, $firstSession->preparations);
+        $this->assertSame(1, $secondSession->validations);
+        $this->assertSame(1, $secondSession->preparations);
     }
 
-    public function test_it_monitors_remote_handlers_and_takes_over_when_one_stops(): void
+    public function test_it_validates_every_session_before_preparing_any_takeover(): void
     {
-        $session = $this->fakeSession([true, false]);
+        $firstSession = new MadelineListenerSessionFake;
+        $blockedSession = new MadelineListenerSessionFake(
+            takeoverException: new RuntimeException('Session is owned by another process.'),
+        );
         $supervisor = $this->fakeSupervisor();
 
-        $supervisor->run(['account' => $session], ChannelSourceEventHandler::class);
+        try {
+            $supervisor->run([
+                'first' => $firstSession,
+                'blocked' => $blockedSession,
+            ], ChannelSourceEventHandler::class);
+            $this->fail('Expected takeover validation to fail.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Session is owned by another process.', $exception->getMessage());
+        }
 
-        $this->assertSame(['account'], array_keys($supervisor->startedSessions));
-        $this->assertSame(1, $supervisor->pauses);
+        $this->assertSame(0, $firstSession->preparations);
+        $this->assertSame([], $supervisor->startedSessions);
     }
 
     public function test_it_requires_at_least_one_session(): void
@@ -41,14 +56,6 @@ class MadelineListenerSupervisorTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $this->fakeSupervisor()->run([], ChannelSourceEventHandler::class);
-    }
-
-    /**
-     * @param  non-empty-list<bool>  $states
-     */
-    private function fakeSession(array $states): MadelineListenerSession
-    {
-        return new MadelineListenerSessionFake($states);
     }
 
     private function fakeSupervisor(): MadelineListenerSupervisorFake
@@ -62,37 +69,36 @@ class MadelineListenerSupervisorFake extends MadelineListenerSupervisor
     /** @var array<string, MadelineListenerSession> */
     public array $startedSessions = [];
 
-    public int $pauses = 0;
-
     protected function startAndLoopMulti(array $sessions, string $eventHandler): void
     {
         $this->startedSessions = $sessions;
-    }
-
-    protected function pause(): void
-    {
-        $this->pauses++;
     }
 }
 
 class MadelineListenerSessionFake implements MadelineListenerSession
 {
-    /** @var non-empty-list<bool> */
-    private array $states;
+    public int $validations = 0;
 
-    private int $stateIndex = 0;
+    public int $preparations = 0;
 
-    /** @param non-empty-list<bool> $states */
-    public function __construct(array $states)
+    public function __construct(private readonly ?RuntimeException $takeoverException = null) {}
+
+    public function isRemote(): bool
     {
-        $this->states = $states;
+        return false;
     }
 
-    public function hasRunningEventHandler(): bool
+    public function assertCanTakeOver(): void
     {
-        $state = $this->states[min($this->stateIndex, count($this->states) - 1)];
-        $this->stateIndex++;
+        $this->validations++;
 
-        return $state;
+        if ($this->takeoverException !== null) {
+            throw $this->takeoverException;
+        }
+    }
+
+    public function prepareForTakeover(): void
+    {
+        $this->preparations++;
     }
 }

@@ -8,8 +8,6 @@ use danog\MadelineProto\EventHandler;
 use InvalidArgumentException;
 use LogicException;
 
-use function Amp\delay;
-
 class MadelineListenerSupervisor
 {
     /**
@@ -22,38 +20,15 @@ class MadelineListenerSupervisor
             throw new InvalidArgumentException('At least one MadelineProto listener session is required.');
         }
 
-        $sessionsToStart = $this->sessionsWithoutRunningEventHandler($sessions);
-
-        if ($sessionsToStart !== []) {
-            $this->startAndLoopMulti($sessionsToStart, $eventHandler);
-
-            return;
+        foreach ($sessions as $session) {
+            $session->assertCanTakeOver();
         }
 
-        while (true) {
-            $this->pause();
-            $sessionsToStart = $this->sessionsWithoutRunningEventHandler($sessions);
-
-            if ($sessionsToStart === []) {
-                continue;
-            }
-
-            $this->startAndLoopMulti($sessionsToStart, $eventHandler);
-
-            return;
+        foreach ($sessions as $session) {
+            $session->prepareForTakeover();
         }
-    }
 
-    /**
-     * @param  array<string, MadelineListenerSession>  $sessions
-     * @return array<string, MadelineListenerSession>
-     */
-    private function sessionsWithoutRunningEventHandler(array $sessions): array
-    {
-        return array_filter(
-            $sessions,
-            static fn (MadelineListenerSession $session): bool => ! $session->hasRunningEventHandler(),
-        );
+        $this->startAndLoopMulti($sessions, $eventHandler);
     }
 
     /**
@@ -74,10 +49,5 @@ class MadelineListenerSupervisor
         );
 
         API::startAndLoopMulti($instances, $eventHandler);
-    }
-
-    protected function pause(): void
-    {
-        delay(15);
     }
 }

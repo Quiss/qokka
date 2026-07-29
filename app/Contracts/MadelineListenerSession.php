@@ -4,5 +4,9 @@ namespace App\Contracts;
 
 interface MadelineListenerSession
 {
-    public function hasRunningEventHandler(): bool;
+    public function isRemote(): bool;
+
+    public function assertCanTakeOver(): void;
+
+    public function prepareForTakeover(): void;
 }

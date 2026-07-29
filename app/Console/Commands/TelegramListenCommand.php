@@ -46,16 +46,16 @@ class TelegramListenCommand extends Command
                 $account->uuid => new MadelineProtoListenerSession($apiFactory->make($account)),
             ])
             ->all();
-        $remotelyRunningAccounts = $accounts
-            ->filter(fn (TelegramAccount $account): bool => $sessions[$account->uuid]->hasRunningEventHandler());
+        $remoteAccounts = $accounts
+            ->filter(fn (TelegramAccount $account): bool => $sessions[$account->uuid]->isRemote());
 
         $this->info("Запускаю Telegram listener для аккаунтов: {$accounts->pluck('name')->join(', ')}.");
 
-        if ($remotelyRunningAccounts->isNotEmpty()) {
+        if ($remoteAccounts->isNotEmpty()) {
             $this->warn(
-                'EventHandler уже работает через IPC для аккаунтов: '
-                .$remotelyRunningAccounts->pluck('name')->join(', ')
-                .'. Оставляю listener активным для контроля и восстановления IPC worker.',
+                'Передаю EventHandler из IPC worker в контейнер madeline для аккаунтов: '
+                .$remoteAccounts->pluck('name')->join(', ')
+                .'.',
             );
         }
 
