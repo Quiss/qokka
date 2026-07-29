@@ -4,9 +4,10 @@ namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
 use App\Services\MadelineApiFactory;
+use App\Services\MadelineListenerSupervisor;
+use App\Services\MadelineProtoListenerSession;
 use App\Telegram\ChannelSourceEventHandler;
 use App\TelegramAccountStatus;
-use danog\MadelineProto\API;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -18,8 +19,10 @@ class TelegramListenCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(MadelineApiFactory $apiFactory): int
-    {
+    public function handle(
+        MadelineApiFactory $apiFactory,
+        MadelineListenerSupervisor $listenerSupervisor,
+    ): int {
         if ((string) config('services.telegram.bridge_secret') === '') {
             $this->error('TELEGRAM_BRIDGE_SECRET не настроен. Укажите общий секрет для listener и HTTP bridge.');
 
@@ -38,15 +41,27 @@ class TelegramListenCommand extends Command
             return self::FAILURE;
         }
 
-        $instances = $accounts
+        $sessions = $accounts
             ->mapWithKeys(fn (TelegramAccount $account): array => [
-                $account->uuid => $apiFactory->make($account),
+                $account->uuid => new MadelineProtoListenerSession($apiFactory->make($account)),
             ])
             ->all();
+        $remotelyRunningAccounts = $accounts
+            ->filter(fn (TelegramAccount $account): bool => $sessions[$account->uuid]->hasRunningEventHandler());
 
         $this->info("Запускаю Telegram listener для аккаунтов: {$accounts->pluck('name')->join(', ')}.");
-        API::startAndLoopMulti($instances, ChannelSourceEventHandler::class);
 
-        return self::SUCCESS;
+        if ($remotelyRunningAccounts->isNotEmpty()) {
+            $this->warn(
+                'EventHandler уже работает через IPC для аккаунтов: '
+                .$remotelyRunningAccounts->pluck('name')->join(', ')
+                .'. Оставляю listener активным для контроля и восстановления IPC worker.',
+            );
+        }
+
+        $listenerSupervisor->run($sessions, ChannelSourceEventHandler::class);
+        $this->error('Telegram listener неожиданно остановился.');
+
+        return self::FAILURE;
     }
 }
