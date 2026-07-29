@@ -169,6 +169,44 @@ class TelegramMediaWorkflowTest extends TestCase
         );
     }
 
+    public function test_media_download_is_released_when_the_source_temporarily_has_no_collector(): void
+    {
+        Queue::fake();
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $payload = app(TelegramMessagePayloadFactory::class)->fromRawMessage($account, $channel, [
+            '_' => 'message',
+            'id' => 10,
+            'date' => now()->timestamp,
+            'message' => 'Фото',
+            'media' => [
+                '_' => 'messageMediaPhoto',
+                'photo' => [
+                    'id' => 100,
+                    'sizes' => [['_' => 'photoSize', 'type' => 'm', 'size' => 120_000]],
+                ],
+            ],
+        ]);
+        $sourcePost = app(IngestTelegramUpdate::class)->handle($payload);
+        $asset = $sourcePost?->mediaAssets()->firstOrFail();
+        $channel->update(['collector_telegram_account_id' => null]);
+        $factory = Mockery::mock(MadelineClientFactory::class);
+        $factory->shouldNotReceive('make');
+        $job = (new DownloadMediaAssetJob($asset->id))->withFakeQueueInteractions();
+
+        $job->handle(
+            new MadelineClientPool($factory),
+            app(MediaFileGarbageCollector::class),
+        );
+
+        $job->assertReleased(300);
+        $this->assertNull($asset->fresh()->failed_at);
+    }
+
     public function test_live_and_history_payloads_update_the_same_media_slot(): void
     {
         Queue::fake();

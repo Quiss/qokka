@@ -339,6 +339,24 @@ class TelegramCollectorAssignmentTest extends TestCase
         $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($preferred));
     }
 
+    public function test_reconciliation_preserves_a_stale_collector_when_no_healthy_replacement_exists(): void
+    {
+        $stale = TelegramAccount::factory()->create([
+            'status' => TelegramAccountStatus::Connected,
+            'last_seen_at' => now()->subMinutes(4),
+        ]);
+        $sourceChannel = SourceChannel::factory()->create([
+            'username' => null,
+            'collector_telegram_account_id' => $stale->id,
+        ]);
+        $sourceChannel->telegramAccounts()->attach($stale->id, [
+            'access_status' => TelegramSourceAccessStatus::Available,
+        ]);
+
+        $this->assertSame(0, app(ReconcileTelegramCollectors::class)->handle());
+        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($stale));
+    }
+
     public function test_reconciliation_retries_a_failed_public_preferred_subscription_after_cooldown(): void
     {
         $preferred = $this->connectedAccount();

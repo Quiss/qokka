@@ -48,9 +48,10 @@ class ReconcileTelegramCollectors
                     $sourceChannel,
                     ensureCurrentSubscription: false,
                     retryUnavailablePreferred: $shouldRetryPreferred,
+                    clearWhenUnavailable: false,
                 );
 
-                if ($selected?->id !== $previousId) {
+                if ($selected !== null && $selected->id !== $previousId) {
                     $reassigned++;
                 }
             });

@@ -18,6 +18,7 @@ class AssignTelegramCollector
         SourceChannel $sourceChannel,
         bool $ensureCurrentSubscription = true,
         bool $retryUnavailablePreferred = false,
+        bool $clearWhenUnavailable = true,
     ): ?TelegramAccount {
         $accounts = $sourceChannel->telegramAccounts()
             ->wherePivot('access_status', TelegramSourceAccessStatus::Available->value)
@@ -94,7 +95,7 @@ class AssignTelegramCollector
             return $account;
         }
 
-        if ($sourceChannel->collector_telegram_account_id !== null) {
+        if ($clearWhenUnavailable && $sourceChannel->collector_telegram_account_id !== null) {
             $sourceChannel->update([
                 'collector_telegram_account_id' => null,
             ]);

@@ -22,11 +22,13 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    private const int ACCOUNT_UNAVAILABLE_RETRY_DELAY = 300;
+
     public const string HIGH_PRIORITY_QUEUE = 'media-download-high';
 
     public const string BACKGROUND_QUEUE = 'media-download-low';
 
-    public int $tries = 3;
+    public int $tries = 24;
 
     public int $timeout = 330;
 
@@ -75,7 +77,17 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         $sourceChannel = $sourceMessage?->sourceChannel;
         $account = $sourceChannel?->collectorTelegramAccount;
 
-        if ($sourceMessage === null || $sourceChannel === null || $account === null || ! $account->is_active) {
+        if ($sourceMessage === null || $sourceChannel === null) {
+            throw new RuntimeException('Для скачивания медиа не найден активный Telegram-аккаунт источника.');
+        }
+
+        if ($account === null || ! $account->is_active) {
+            if ($this->attempts() < $this->tries) {
+                $this->release(self::ACCOUNT_UNAVAILABLE_RETRY_DELAY);
+
+                return;
+            }
+
             throw new RuntimeException('Для скачивания медиа не найден активный Telegram-аккаунт источника.');
         }
 
