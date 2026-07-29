@@ -17,6 +17,8 @@ PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
 PUBLISH_DRAIN_TIMEOUT ?= 620
 PUBLISH_QUEUE ?= redis:publish
 TELEGRAM_QUEUE ?= redis:telegram
+MEDIA_DOWNLOAD_HIGH_QUEUE ?= redis:media-download-high
+MEDIA_DOWNLOAD_LOW_QUEUE ?= redis:media-download-low
 POSTGRES_MIN_CONNECTIONS ?= 200
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
@@ -38,10 +40,12 @@ first:
 	fi
 deploy:
 	@set -eu; \
-	trap '$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:continue >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
+	trap '$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:continue >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_HIGH_QUEUE) >/dev/null 2>&1 || true; $(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE) >/dev/null 2>&1 || true' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:pause; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
 	git pull; \
 	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
@@ -51,6 +55,8 @@ deploy:
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
 	$(MAKE) restart-horizon; \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
+	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
 	trap - 0 1 2 15

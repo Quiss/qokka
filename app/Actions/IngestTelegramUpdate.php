@@ -192,7 +192,11 @@ class IngestTelegramUpdate
 
             DB::afterCommit(function () use ($mediaJobs): void {
                 foreach ($mediaJobs as [$assetId, $previewOnly]) {
-                    DownloadMediaAssetJob::dispatch($assetId, $previewOnly)->onQueue('telegram');
+                    DownloadMediaAssetJob::dispatch($assetId, $previewOnly)->onQueue(
+                        $previewOnly
+                            ? DownloadMediaAssetJob::BACKGROUND_QUEUE
+                            : DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
+                    );
                 }
             });
 

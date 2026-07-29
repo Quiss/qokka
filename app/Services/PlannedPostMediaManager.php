@@ -110,7 +110,9 @@ class PlannedPostMediaManager
                 ]);
 
                 if ($asset->path === null) {
-                    DownloadMediaAssetJob::dispatch($asset->id)->onQueue('telegram')->afterCommit();
+                    DownloadMediaAssetJob::dispatch($asset->id)
+                        ->onQueue(DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE)
+                        ->afterCommit();
                 }
             });
         });

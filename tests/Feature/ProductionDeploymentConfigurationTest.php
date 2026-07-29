@@ -2,27 +2,54 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\DownloadMediaAssetJob;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class ProductionDeploymentConfigurationTest extends TestCase
 {
-    public function test_deploy_pauses_and_restores_publish_and_telegram_queues(): void
+    public function test_deploy_pauses_and_restores_all_long_running_queues(): void
     {
         $makefile = File::get(base_path('Makefile'));
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
 
-        $this->assertStringContainsString(
-            'queue:pause $(PUBLISH_QUEUE)',
-            $deploy,
-        );
-        $this->assertStringContainsString(
-            'queue:pause $(TELEGRAM_QUEUE)',
-            $deploy,
-        );
-        $this->assertSame(2, substr_count($deploy, 'queue:continue $(PUBLISH_QUEUE)'));
-        $this->assertSame(2, substr_count($deploy, 'queue:continue $(TELEGRAM_QUEUE)'));
+        foreach ([
+            'PUBLISH_QUEUE',
+            'TELEGRAM_QUEUE',
+            'MEDIA_DOWNLOAD_HIGH_QUEUE',
+            'MEDIA_DOWNLOAD_LOW_QUEUE',
+        ] as $queueVariable) {
+            $this->assertStringContainsString(
+                "queue:pause \$({$queueVariable})",
+                $deploy,
+            );
+            $this->assertSame(
+                2,
+                substr_count($deploy, "queue:continue \$({$queueVariable})"),
+            );
+        }
+    }
+
+    public function test_media_downloads_use_dedicated_bounded_supervisors_with_safe_timeouts(): void
+    {
+        $telegramSupervisor = config('horizon.environments.production.supervisor-telegram');
+        $highPrioritySupervisor = config('horizon.environments.production.supervisor-media-download-high');
+        $backgroundSupervisor = config('horizon.environments.production.supervisor-media-download-low');
+        $job = new DownloadMediaAssetJob(1);
+        $retryAfter = config('queue.connections.redis.retry_after');
+
+        $this->assertSame(['telegram'], $telegramSupervisor['queue']);
+        $this->assertSame(3, $telegramSupervisor['maxProcesses']);
+        $this->assertSame([DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE], $highPrioritySupervisor['queue']);
+        $this->assertSame(3, $highPrioritySupervisor['maxProcesses']);
+        $this->assertSame([DownloadMediaAssetJob::BACKGROUND_QUEUE], $backgroundSupervisor['queue']);
+        $this->assertSame(2, $backgroundSupervisor['maxProcesses']);
+        $this->assertSame(360, $highPrioritySupervisor['timeout']);
+        $this->assertSame(360, $backgroundSupervisor['timeout']);
+        $this->assertIsInt($retryAfter);
+        $this->assertTrue($job->timeout < $highPrioritySupervisor['timeout']);
+        $this->assertTrue($highPrioritySupervisor['timeout'] < $retryAfter);
     }
 
     public function test_deploy_gracefully_terminates_horizon_without_stopping_worker_containers(): void

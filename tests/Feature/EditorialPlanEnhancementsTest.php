@@ -539,7 +539,7 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertNotified('Повторная загрузка медиа поставлена в очередь');
 
         Queue::assertPushedOn(
-            'telegram',
+            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
             DownloadMediaAssetJob::class,
             fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $video->id && ! $job->previewOnly,
         );
@@ -641,7 +641,7 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertNull($mediaAsset->failed_at);
         $this->assertArrayNotHasKey('download_error', $mediaAsset->metadata ?? []);
         Queue::assertPushedOn(
-            'telegram',
+            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
             DownloadMediaAssetJob::class,
             fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $mediaAsset->id
                 && ! $job->previewOnly,

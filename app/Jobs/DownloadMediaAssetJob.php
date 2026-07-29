@@ -22,9 +22,13 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    public const string HIGH_PRIORITY_QUEUE = 'media-download-high';
+
+    public const string BACKGROUND_QUEUE = 'media-download-low';
+
     public int $tries = 3;
 
-    public int $timeout = 360;
+    public int $timeout = 330;
 
     public int $uniqueFor = 7200;
 

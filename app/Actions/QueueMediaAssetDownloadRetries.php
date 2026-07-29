@@ -48,7 +48,8 @@ class QueueMediaAssetDownloadRetries
 
             DB::afterCommit(function () use ($origins): void {
                 foreach ($origins as $origin) {
-                    DownloadMediaAssetJob::dispatch($origin->id)->onQueue('telegram');
+                    DownloadMediaAssetJob::dispatch($origin->id)
+                        ->onQueue(DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE);
                 }
             });
 

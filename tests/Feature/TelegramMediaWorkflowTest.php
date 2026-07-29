@@ -120,7 +120,53 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertNotNull($asset);
         $this->assertSame($sourcePost->messages()->firstOrFail()->id, $asset->source_message_id);
         $this->assertSame(MediaType::Photo, $asset->type);
-        Queue::assertPushed(DownloadMediaAssetJob::class, fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id && ! $job->previewOnly);
+        Queue::assertPushedOn(
+            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id && ! $job->previewOnly,
+        );
+    }
+
+    public function test_history_ingestion_queues_video_preview_as_a_background_download(): void
+    {
+        Queue::fake();
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $payload = app(TelegramMessagePayloadFactory::class)->fromRawMessage($account, $channel, [
+            '_' => 'message',
+            'id' => 11,
+            'date' => now()->timestamp,
+            'message' => 'Видео',
+            'media' => [
+                '_' => 'messageMediaDocument',
+                'document' => [
+                    'id' => 200,
+                    'mime_type' => 'video/mp4',
+                    'size' => 5_000_000,
+                    'attributes' => [
+                        ['_' => 'documentAttributeVideo', 'duration' => 12, 'w' => 1080, 'h' => 1920],
+                    ],
+                    'thumbs' => [
+                        ['_' => 'photoSize', 'type' => 'm', 'size' => 25_000],
+                    ],
+                ],
+            ],
+        ]);
+
+        $sourcePost = app(IngestTelegramUpdate::class)->handle($payload);
+        $asset = $sourcePost?->mediaAssets()->firstOrFail();
+
+        $this->assertNotNull($asset);
+        $this->assertSame(MediaType::Video, $asset->type);
+        Queue::assertPushedOn(
+            DownloadMediaAssetJob::BACKGROUND_QUEUE,
+            DownloadMediaAssetJob::class,
+            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id && $job->previewOnly,
+        );
     }
 
     public function test_live_and_history_payloads_update_the_same_media_slot(): void
@@ -237,11 +283,13 @@ class TelegramMediaWorkflowTest extends TestCase
         $selected = $post->mediaAssets()->orderBy('sort_order')->get();
         $this->assertSame([$secondAsset->id, $firstAsset->id], $selected->pluck('origin_media_asset_id')->all());
         $this->assertSame([0, 1], $selected->pluck('sort_order')->all());
-        Queue::assertPushed(
+        Queue::assertPushedOn(
+            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
             DownloadMediaAssetJob::class,
             fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $firstAsset->id,
         );
-        Queue::assertPushed(
+        Queue::assertPushedOn(
+            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
             DownloadMediaAssetJob::class,
             fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $secondAsset->id,
         );
