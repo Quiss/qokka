@@ -12,8 +12,6 @@ use App\Services\MadelineClientPool;
 use App\Services\MediaFileGarbageCollector;
 use App\Services\TelegramMediaDownloadAccountResolver;
 use App\Services\TelegramMediaDownloadConcurrency;
-use Carbon\CarbonImmutable;
-use DateTimeInterface;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -33,45 +31,25 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    private const int ACCOUNT_UNAVAILABLE_RETRY_DELAY = 300;
-
     public const string HIGH_PRIORITY_QUEUE = 'media-download-high';
 
     public const string BACKGROUND_QUEUE = 'media-download-low';
 
-    public int $tries = 0;
+    public int $tries = 1;
 
     public int $timeout = 330;
 
-    public int $uniqueFor;
-
-    public ?int $retryUntilTimestamp = null;
-
-    /** @var list<int> */
-    public array $backoff = [60, 300, 900];
+    public int $uniqueFor = 7200;
 
     public function __construct(
         public readonly int $mediaAssetId,
         public readonly bool $previewOnly = false,
-    ) {
-        $retryWindow = max(1, (int) config('services.telegram.media_retry_window_seconds', 43200));
-        $this->retryUntilTimestamp = now()->addSeconds($retryWindow)->getTimestamp();
-        $this->uniqueFor = $retryWindow + 3600;
-    }
+    ) {}
 
     /** @return list<FailOnException> */
     public function middleware(): array
     {
-        return [new FailOnException([PermanentTelegramMediaException::class])];
-    }
-
-    public function retryUntil(): DateTimeInterface
-    {
-        $this->retryUntilTimestamp ??= now()
-            ->addSeconds(max(1, (int) config('services.telegram.media_retry_window_seconds', 43200)))
-            ->getTimestamp();
-
-        return CarbonImmutable::createFromTimestamp($this->retryUntilTimestamp);
+        return [new FailOnException([Throwable::class])];
     }
 
     public function uniqueVia(): Repository
@@ -141,15 +119,15 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 
         if ($account === null) {
             VerifySourceChannelAccessJob::dispatch($sourceChannel->id)->onQueue('telegram');
-            $this->rememberTransientFailure(
+            $message = 'Для конкретного источника нет готового Telegram-аккаунта с подтверждённым доступом.';
+            $this->rememberFailure(
                 $origin,
                 'telegram_account_unavailable',
-                'Для конкретного источника нет готового Telegram-аккаунта с подтверждённым доступом.',
+                $message,
                 $sourceChannel,
             );
-            $this->release(self::ACCOUNT_UNAVAILABLE_RETRY_DELAY);
 
-            return;
+            throw new RuntimeException($message);
         }
 
         $lockAcquired = $downloadConcurrency->run(
@@ -174,14 +152,16 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         );
 
         if (! $lockAcquired) {
-            $this->rememberTransientFailure(
+            $message = 'Другой media download уже использует этот Telegram-аккаунт.';
+            $this->rememberFailure(
                 $origin,
                 'telegram_account_busy',
-                'Другой media download уже использует этот Telegram-аккаунт.',
+                $message,
                 $sourceChannel,
                 $account,
             );
-            $this->release(random_int(15, 30));
+
+            throw new RuntimeException($message);
         }
     }
 
@@ -273,7 +253,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         } catch (Throwable $exception) {
             $this->deleteFilesWithoutFailingJob([$absolutePath]);
             $clientPool->forget($account);
-            $this->rememberTransientFailure(
+            $this->rememberFailure(
                 $origin,
                 class_basename($exception),
                 $exception->getMessage(),
@@ -345,7 +325,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         return $this->previewOnly ? 'preview_download_last_error' : 'download_last_error';
     }
 
-    private function rememberTransientFailure(
+    private function rememberFailure(
         MediaAsset $origin,
         string $code,
         string $message,
@@ -364,7 +344,7 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         $origin->update(['metadata' => $metadata]);
         $this->syncClones($origin->fresh());
 
-        Log::warning('Telegram media download will be retried.', [
+        Log::warning('Telegram media download attempt failed.', [
             'media_asset_id' => $origin->id,
             'source_message_id' => $origin->source_message_id,
             'source_channel_id' => $sourceChannel->id,

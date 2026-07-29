@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Jobs\DownloadMediaAssetJob;
+use Illuminate\Queue\Middleware\FailOnException;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 class ProductionDeploymentConfigurationTest extends TestCase
@@ -48,11 +50,31 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(360, $highPrioritySupervisor['timeout']);
         $this->assertSame(360, $backgroundSupervisor['timeout']);
         $this->assertIsInt($retryAfter);
-        $this->assertSame(0, $job->tries);
-        $this->assertSame(46800, $job->uniqueFor);
-        $this->assertGreaterThan(now()->addHours(11)->getTimestamp(), $job->retryUntil()->getTimestamp());
+        $this->assertSame(1, $job->tries);
+        $this->assertSame(7200, $job->uniqueFor);
+        $this->assertFalse(method_exists($job, 'retryUntil'));
+        $this->assertContainsOnlyInstancesOf(FailOnException::class, $job->middleware());
         $this->assertTrue($job->timeout < $highPrioritySupervisor['timeout']);
         $this->assertTrue($highPrioritySupervisor['timeout'] < $retryAfter);
+    }
+
+    public function test_media_download_job_fails_on_the_first_exception(): void
+    {
+        $job = (new DownloadMediaAssetJob(1))->withFakeQueueInteractions();
+        $exception = new RuntimeException('Telegram IPC failed.');
+
+        try {
+            $job->middleware()[0]->handle(
+                $job,
+                static fn (): never => throw $exception,
+            );
+            $this->fail('The media download middleware did not propagate the exception.');
+        } catch (RuntimeException $thrownException) {
+            $this->assertSame($exception, $thrownException);
+        }
+
+        $job->assertFailedWith($exception);
+        $job->assertNotReleased();
     }
 
     public function test_deploy_stops_madeline_before_updating_code_and_resumes_after_readiness(): void

@@ -72,7 +72,6 @@ return [
         'rpc_drop_timeout' => (int) env('TELEGRAM_RPC_DROP_TIMEOUT', 60),
         'owner_heartbeat_seconds' => (int) env('TELEGRAM_OWNER_HEARTBEAT_SECONDS', 15),
         'owner_lease_ttl_seconds' => (int) env('TELEGRAM_OWNER_LEASE_TTL_SECONDS', 45),
-        'media_retry_window_seconds' => (int) env('TELEGRAM_MEDIA_RETRY_WINDOW_SECONDS', 43200),
         'media_lock_seconds' => (int) env('TELEGRAM_MEDIA_LOCK_SECONDS', 420),
         'coordination_cache_store' => env('TELEGRAM_COORDINATION_CACHE_STORE', 'redis'),
         'socks5' => [
