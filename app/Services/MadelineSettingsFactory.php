@@ -6,6 +6,7 @@ use App\Models\TelegramAccount;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\Settings;
 use danog\MadelineProto\Settings\Database\Postgres;
+use danog\MadelineProto\Stream\Proxy\SocksProxy;
 use Illuminate\Support\Facades\File;
 use RuntimeException;
 
@@ -51,6 +52,7 @@ class MadelineSettingsFactory
         $settings->getAppInfo()
             ->setApiId((int) $apiId)
             ->setApiHash((string) $apiHash);
+        $this->configureSocks5Proxy($settings);
 
         return $settings;
     }
@@ -72,5 +74,44 @@ class MadelineSettingsFactory
         $value = (int) config($key, $default);
 
         return $value > 0 ? $value : $default;
+    }
+
+    private function configureSocks5Proxy(Settings $settings): void
+    {
+        $host = trim((string) config('services.telegram.socks5.host'));
+
+        if ($host === '') {
+            return;
+        }
+
+        $port = (int) config('services.telegram.socks5.port', 1080);
+
+        if ($port < 1 || $port > 65535) {
+            throw new RuntimeException('TELEGRAM_SOCKS5_PORT must be between 1 and 65535.');
+        }
+
+        $username = trim((string) config('services.telegram.socks5.username'));
+        $password = (string) config('services.telegram.socks5.password');
+
+        if (($username === '') !== ($password === '')) {
+            throw new RuntimeException(
+                'TELEGRAM_SOCKS5_USERNAME and TELEGRAM_SOCKS5_PASSWORD must be configured together.',
+            );
+        }
+
+        $proxy = [
+            'address' => $host,
+            'port' => $port,
+        ];
+
+        if ($username !== '') {
+            $proxy['username'] = $username;
+            $proxy['password'] = $password;
+        }
+
+        $settings->getConnection()
+            ->addProxy(SocksProxy::class, $proxy)
+            ->setBindTo('0.0.0.0:0')
+            ->setRetry(! (bool) config('services.telegram.socks5.proxy_only', true));
     }
 }

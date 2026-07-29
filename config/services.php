@@ -68,6 +68,13 @@ return [
         'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 300 * 1024 * 1024),
         'database_max_connections' => (int) env('TELEGRAM_DATABASE_MAX_CONNECTIONS', 20),
         'database_idle_timeout' => (int) env('TELEGRAM_DATABASE_IDLE_TIMEOUT', 300),
+        'socks5' => [
+            'host' => env('TELEGRAM_SOCKS5_HOST'),
+            'port' => (int) env('TELEGRAM_SOCKS5_PORT', 1080),
+            'username' => env('TELEGRAM_SOCKS5_USERNAME'),
+            'password' => env('TELEGRAM_SOCKS5_PASSWORD'),
+            'proxy_only' => (bool) env('TELEGRAM_SOCKS5_PROXY_ONLY', true),
+        ],
     ],
 
 ];
