@@ -74,6 +74,7 @@ return [
             'username' => env('TELEGRAM_SOCKS5_USERNAME'),
             'password' => env('TELEGRAM_SOCKS5_PASSWORD'),
             'proxy_only' => (bool) env('TELEGRAM_SOCKS5_PROXY_ONLY', true),
+            'https_transport' => (bool) env('TELEGRAM_SOCKS5_HTTPS_TRANSPORT', true),
         ],
     ],
 

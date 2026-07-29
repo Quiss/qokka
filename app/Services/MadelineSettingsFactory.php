@@ -6,6 +6,7 @@ use App\Models\TelegramAccount;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\Settings;
 use danog\MadelineProto\Settings\Database\Postgres;
+use danog\MadelineProto\Stream\MTProtoTransport\HttpsStream;
 use danog\MadelineProto\Stream\Proxy\SocksProxy;
 use Illuminate\Support\Facades\File;
 use RuntimeException;
@@ -109,9 +110,13 @@ class MadelineSettingsFactory
             $proxy['password'] = $password;
         }
 
-        $settings->getConnection()
+        $connection = $settings->getConnection()
             ->addProxy(SocksProxy::class, $proxy)
             ->setBindTo('0.0.0.0:0')
             ->setRetry(! (bool) config('services.telegram.socks5.proxy_only', true));
+
+        if ((bool) config('services.telegram.socks5.https_transport', true)) {
+            $connection->setProtocol(HttpsStream::class);
+        }
     }
 }

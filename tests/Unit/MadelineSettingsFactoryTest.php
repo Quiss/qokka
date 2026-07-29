@@ -6,6 +6,7 @@ use App\Models\TelegramAccount;
 use App\Services\MadelineSettingsFactory;
 use danog\MadelineProto\Logger;
 use danog\MadelineProto\Settings\Database\Postgres;
+use danog\MadelineProto\Stream\MTProtoTransport\HttpsStream;
 use danog\MadelineProto\Stream\Proxy\SocksProxy;
 use RuntimeException;
 use Tests\TestCase;
@@ -90,6 +91,7 @@ class MadelineSettingsFactoryTest extends TestCase
                 'username' => 'channelbot',
                 'password' => 'secret',
                 'proxy_only' => true,
+                'https_transport' => true,
             ],
         ]);
         $account = new TelegramAccount(['uuid' => '299d4c77-247b-4e37-867c-19195e0ab435']);
@@ -104,6 +106,7 @@ class MadelineSettingsFactoryTest extends TestCase
         ]], $connection->getProxies()[SocksProxy::class]);
         $this->assertSame('0.0.0.0:0', $connection->getBindTo());
         $this->assertFalse($connection->getRetry());
+        $this->assertSame(HttpsStream::class, $connection->getProtocol());
     }
 
     public function test_it_keeps_direct_connections_when_socks5_proxy_is_not_configured(): void
