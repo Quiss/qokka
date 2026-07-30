@@ -170,6 +170,9 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $emptyReportPeersPatch = File::get(
             base_path('docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch'),
         );
+        $disableCdnDownloadsPatch = File::get(
+            base_path('docker/production/telegram-api/patches/madelineproto-disable-cdn-downloads.patch'),
+        );
         $scheduler = Str::between($compose, "  scheduler:\n", "\n  # Horizon");
         $telegramApi = Str::between($compose, "  telegram-api:\n", "\n  # Receives raw");
         $telegramEvents = Str::between($compose, "  telegram-events:\n", "\n  # Executes media");
@@ -199,10 +202,19 @@ class ProductionDeploymentConfigurationTest extends TestCase
             $dockerfile,
         );
         $this->assertStringContainsString(
+            'patches/madelineproto-disable-cdn-downloads.patch',
+            $dockerfile,
+        );
+        $this->assertStringContainsString(
             'if ($userOrId === [])',
             $emptyReportPeersPatch,
         );
         $this->assertStringContainsString('return [];', $emptyReportPeersPatch);
+        $this->assertStringContainsString(
+            "'cdn_supported' => false",
+            $disableCdnDownloadsPatch,
+        );
+        $this->assertStringContainsString('RESUME_ON_ERROR: 1', $telegramApi);
         $this->assertStringContainsString(
             './storage/app/telegram-api-server/sessions:/app-host-link/sessions',
             $telegramApi,

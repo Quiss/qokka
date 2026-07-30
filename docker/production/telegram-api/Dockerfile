@@ -18,8 +18,14 @@ RUN composer install \
     --optimize-autoloader
 
 COPY docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch /tmp/madelineproto-empty-report-peers.patch
+COPY docker/production/telegram-api/patches/madelineproto-disable-cdn-downloads.patch /tmp/madelineproto-disable-cdn-downloads.patch
 
 RUN patch --strip=1 \
         --forward \
         --input=/tmp/madelineproto-empty-report-peers.patch \
-    && rm /tmp/madelineproto-empty-report-peers.patch
+    && patch --strip=1 \
+        --forward \
+        --input=/tmp/madelineproto-disable-cdn-downloads.patch \
+    && rm \
+        /tmp/madelineproto-empty-report-peers.patch \
+        /tmp/madelineproto-disable-cdn-downloads.patch

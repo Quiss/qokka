@@ -1,0 +1,5 @@
+--- a/vendor/danog/madelineproto/src/MTProtoTools/Files.php
++++ b/vendor/danog/madelineproto/src/MTProtoTools/Files.php
+@@ -1238 +1238 @@
+-                $basic_param = ['location' => $messageMedia['InputFileLocation'], 'cdn_supported' => true, 'floodWaitLimit' => 0, 'cancellation' => $cancellation, 'specialMethodType' => SpecialMethodType::FILE_RELATED];
++                $basic_param = ['location' => $messageMedia['InputFileLocation'], 'cdn_supported' => false, 'floodWaitLimit' => 0, 'cancellation' => $cancellation, 'specialMethodType' => SpecialMethodType::FILE_RELATED];
