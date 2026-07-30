@@ -55,6 +55,7 @@ class TelegramOwnerCommandDispatcher
                     $priority,
                     $maxAttempts,
                 ): TelegramOwnerCommand {
+                    $normalizedMaxAttempts = max(1, $maxAttempts);
                     $command = TelegramOwnerCommand::query()
                         ->whereBelongsTo($telegramAccount)
                         ->where('deduplication_key', $deduplicationKey)
@@ -68,6 +69,12 @@ class TelegramOwnerCommandDispatcher
                             TelegramOwnerCommandStatus::Running,
                         ], true)
                     ) {
+                        if ($command->max_attempts < $normalizedMaxAttempts) {
+                            $command->update([
+                                'max_attempts' => $normalizedMaxAttempts,
+                            ]);
+                        }
+
                         return $command;
                     }
 
@@ -82,7 +89,7 @@ class TelegramOwnerCommandDispatcher
                         'result' => null,
                         'priority' => $priority,
                         'attempts' => 0,
-                        'max_attempts' => max(1, $maxAttempts),
+                        'max_attempts' => $normalizedMaxAttempts,
                         'available_at' => now(),
                         'started_at' => null,
                         'finished_at' => null,

@@ -328,11 +328,12 @@ class TelegramMediaWorkflowTest extends TestCase
             'downloaded_at' => null,
         ]);
         $first = app(RequestTelegramMediaDownload::class)->handle($asset);
+        $first->update(['max_attempts' => 1]);
         $second = app(RequestTelegramMediaDownload::class)->handle($asset);
 
         $this->assertTrue($first->is($second));
         $this->assertDatabaseCount('telegram_owner_commands', 1);
-        $this->assertSame(1, $first->max_attempts);
+        $this->assertSame(3, $second->max_attempts);
     }
 
     public function test_missing_media_backlog_does_not_retry_terminal_failures_implicitly(): void
@@ -1202,6 +1203,6 @@ class TelegramMediaWorkflowTest extends TestCase
             ->firstOrFail();
 
         $this->assertSame(TelegramOwnerCommandStatus::Pending, $command->status);
-        $this->assertSame(1, $command->max_attempts);
+        $this->assertSame(3, $command->max_attempts);
     }
 }

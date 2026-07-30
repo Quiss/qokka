@@ -173,6 +173,9 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $disableCdnDownloadsPatch = File::get(
             base_path('docker/production/telegram-api/patches/madelineproto-disable-cdn-downloads.patch'),
         );
+        $disablePreparedStatementsPatch = File::get(
+            base_path('docker/production/telegram-api/patches/async-orm-disable-prepared-statements.patch'),
+        );
         $scheduler = Str::between($compose, "  scheduler:\n", "\n  # Horizon");
         $telegramApi = Str::between($compose, "  telegram-api:\n", "\n  # Receives raw");
         $telegramEvents = Str::between($compose, "  telegram-events:\n", "\n  # Executes media");
@@ -206,6 +209,10 @@ class ProductionDeploymentConfigurationTest extends TestCase
             $dockerfile,
         );
         $this->assertStringContainsString(
+            'patches/async-orm-disable-prepared-statements.patch',
+            $dockerfile,
+        );
+        $this->assertStringContainsString(
             'if ($userOrId === [])',
             $emptyReportPeersPatch,
         );
@@ -213,6 +220,14 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertStringContainsString(
             "'cdn_supported' => false",
             $disableCdnDownloadsPatch,
+        );
+        $this->assertStringContainsString(
+            '-        return $this->db->prepare($sql)->execute($params);',
+            $disablePreparedStatementsPatch,
+        );
+        $this->assertStringContainsString(
+            '+        return $this->db->execute($sql, $params);',
+            $disablePreparedStatementsPatch,
         );
         $this->assertStringContainsString('RESUME_ON_ERROR: 1', $telegramApi);
         $this->assertStringContainsString(

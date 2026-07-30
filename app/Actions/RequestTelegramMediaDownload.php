@@ -55,7 +55,7 @@ class RequestTelegramMediaDownload
             ['media_asset_id' => $origin->id],
             'media:'.$origin->id.':'.($previewOnly ? 'preview' : 'full'),
             priority: $previewOnly ? 50 : 100,
-            maxAttempts: 1,
+            maxAttempts: 3,
         );
     }
 }

@@ -19,6 +19,7 @@ RUN composer install \
 
 COPY docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch /tmp/madelineproto-empty-report-peers.patch
 COPY docker/production/telegram-api/patches/madelineproto-disable-cdn-downloads.patch /tmp/madelineproto-disable-cdn-downloads.patch
+COPY docker/production/telegram-api/patches/async-orm-disable-prepared-statements.patch /tmp/async-orm-disable-prepared-statements.patch
 
 RUN patch --strip=1 \
         --forward \
@@ -26,6 +27,10 @@ RUN patch --strip=1 \
     && patch --strip=1 \
         --forward \
         --input=/tmp/madelineproto-disable-cdn-downloads.patch \
+    && patch --strip=1 \
+        --forward \
+        --input=/tmp/async-orm-disable-prepared-statements.patch \
     && rm \
         /tmp/madelineproto-empty-report-peers.patch \
-        /tmp/madelineproto-disable-cdn-downloads.patch
+        /tmp/madelineproto-disable-cdn-downloads.patch \
+        /tmp/async-orm-disable-prepared-statements.patch
