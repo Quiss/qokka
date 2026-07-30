@@ -2,15 +2,9 @@
 
 namespace App\Contracts;
 
-use Amp\Cancellation;
-
 interface MadelineClient
 {
-    public function downloadToFile(
-        mixed $media,
-        string $path,
-        ?Cancellation $cancellation = null,
-    ): string;
+    public function downloadToFile(mixed $media, string $path): string;
 
     /**
      * @return array<string, mixed>|null
@@ -22,10 +16,8 @@ interface MadelineClient
      */
     public function getHistory(int|string $peer, int $offsetId, int $limit): array;
 
-    /**
-     * @return array<string, mixed>
-     */
-    public function getInfo(int|string $peer): array;
+    /** @return array<string, mixed>|string|int */
+    public function getInfo(mixed $peer): array|string|int;
 
     public function canBanChannelParticipants(int|string $channel): bool;
 

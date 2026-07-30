@@ -24,8 +24,13 @@ class ChannelSourceEventHandlerTest extends TestCase
 
         $this->assertIsString($normalizedSource);
         $this->assertStringContainsString(
-            'public function onStart(): void { $this->heartbeatOwner(); $this->callFork(function (): void { $this->refreshSubscriptions(); }); }',
+            '$this->callFork(function (): void { $this->refreshSubscriptions(); })->ignore();',
             $normalizedSource,
         );
+        $this->assertStringContainsString(
+            'app(TelegramOwnerCommandPump::class)->run(',
+            $normalizedSource,
+        );
+        $this->assertSame(2, substr_count($normalizedSource, '})->ignore();'));
     }
 }

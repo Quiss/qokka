@@ -7,7 +7,9 @@ namespace App\Telegram;
 use Amp\Http\Client\HttpClient;
 use Amp\Http\Client\HttpClientBuilder;
 use Amp\Http\Client\Request;
+use App\Contracts\MadelineClient;
 use App\Services\MadelineOwnerLease;
+use App\Services\TelegramOwnerCommandPump;
 use danog\MadelineProto\EventHandler\Attributes\Cron;
 use danog\MadelineProto\EventHandler\Attributes\Handler;
 use danog\MadelineProto\EventHandler\Channel\MessageForwards;
@@ -24,7 +26,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
-final class ChannelSourceEventHandler extends SimpleEventHandler
+final class ChannelSourceEventHandler extends SimpleEventHandler implements MadelineClient
 {
     /** @var list<int> */
     private array $allowedPeerIds = [];
@@ -40,7 +42,13 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
         $this->heartbeatOwner();
         $this->callFork(function (): void {
             $this->refreshSubscriptions();
-        });
+        })->ignore();
+        $this->callFork(function (): void {
+            app(TelegramOwnerCommandPump::class)->run(
+                $this->telegramAccountUuid(),
+                $this,
+            );
+        })->ignore();
     }
 
     #[Cron(period: 5.0)]
@@ -150,13 +158,21 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
         };
         $extension = ltrim($media->fileExt ?: '', '.') ?: 'bin';
         $externalId = $this->mediaExternalId($media);
+        $thumbnail = collect($media->thumbs)
+            ->filter(fn (array $thumb): bool => filled($thumb['type'] ?? null))
+            ->sortByDesc(fn (array $thumb): int => (int) ($thumb['size'] ?? 0))
+            ->first();
         $metadata = array_filter([
             'bot_api_file_id' => $media->botApiFileId,
             'telegram_media_id' => $media->location['id'] ?? null,
             'file_name' => $media->fileName,
+            'thumbnail_type' => is_array($thumbnail) ? $thumbnail['type'] : null,
             'width' => property_exists($media, 'width') ? $media->width : null,
             'height' => property_exists($media, 'height') ? $media->height : null,
             'duration' => property_exists($media, 'duration') ? $media->duration : null,
+            'supports_streaming' => property_exists($media, 'supportsStreaming')
+                ? $media->supportsStreaming
+                : null,
         ], static fn (mixed $value): bool => $value !== null);
 
         return [[
@@ -179,6 +195,99 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
         }
 
         return $media->botApiFileUniqueId;
+    }
+
+    public function getChannelMessage(int|string $peer, int $messageId): ?array
+    {
+        $response = $this->channels->getMessages(
+            channel: $peer,
+            id: [$messageId],
+        );
+
+        return collect($response['messages'] ?? [])
+            ->first(fn (array $message): bool => ($message['_'] ?? null) === 'message'
+                && (int) ($message['id'] ?? 0) === $messageId);
+    }
+
+    public function getHistory(int|string $peer, int $offsetId, int $limit): array
+    {
+        return $this->messages->getHistory(
+            peer: $peer,
+            offset_id: $offsetId,
+            limit: $limit,
+        );
+    }
+
+    public function canBanChannelParticipants(int|string $channel): bool
+    {
+        $response = $this->channels->getParticipant(
+            channel: $channel,
+            participant: 'me',
+        );
+        $participant = $response['participant'];
+
+        return match ($participant['_']) {
+            'channelParticipantCreator' => true,
+            'channelParticipantAdmin' => $participant['admin_rights']['ban_users'],
+            default => false,
+        };
+    }
+
+    public function getChannelParticipants(int|string $channel, int $offset, int $limit): array
+    {
+        return $this->channels->getParticipants(
+            filter: ['_' => 'channelParticipantsSearch', 'q' => ''],
+            channel: $channel,
+            offset: $offset,
+            limit: $limit,
+            hash: [],
+        );
+    }
+
+    public function banChannelParticipant(int|string $channel, int $participantId): void
+    {
+        $this->channels->editBanned(
+            banned_rights: [
+                '_' => 'chatBannedRights',
+                'view_messages' => true,
+                'until_date' => 0,
+            ],
+            channel: $channel,
+            participant: $participantId,
+        );
+    }
+
+    public function unbanChannelParticipant(int|string $channel, int $participantId): void
+    {
+        $this->channels->editBanned(
+            banned_rights: [
+                '_' => 'chatBannedRights',
+                'view_messages' => false,
+                'until_date' => 0,
+            ],
+            channel: $channel,
+            participant: $participantId,
+        );
+    }
+
+    public function joinChannel(int|string $channel): void
+    {
+        $this->channels->joinChannel(channel: $channel);
+    }
+
+    public function muteNotifications(int|string $peer): void
+    {
+        $this->account->updateNotifySettings(
+            peer: [
+                '_' => 'inputNotifyPeer',
+                'peer' => $peer,
+            ],
+            settings: [
+                '_' => 'inputPeerNotifySettings',
+                'silent' => true,
+                'mute_until' => 2147483647,
+            ],
+        );
     }
 
     /** @param array<string, mixed> $payload */

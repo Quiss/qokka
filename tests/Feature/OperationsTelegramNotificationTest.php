@@ -231,7 +231,7 @@ class OperationsTelegramNotificationTest extends TestCase
         $downloadJob = new DownloadMediaAssetJob($asset->id);
         $queueJob = Mockery::mock(QueueJob::class);
         $queueJob->shouldReceive('resolveName')->once()->andReturn(DownloadMediaAssetJob::class);
-        $queueJob->shouldReceive('getQueue')->once()->andReturn('media-download-high');
+        $queueJob->shouldReceive('getQueue')->once()->andReturn('telegram');
         $queueJob->shouldReceive('payload')->once()->andReturn([
             'data' => ['command' => serialize($downloadJob)],
         ]);

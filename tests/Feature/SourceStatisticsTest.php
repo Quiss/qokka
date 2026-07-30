@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Actions\IngestTelegramUpdate;
 use App\Actions\PurgeSourceChannelContent;
+use App\Contracts\MadelineClient;
 use App\Jobs\SyncSourceChannelStatisticsJob;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
@@ -14,23 +15,25 @@ use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
 use App\Models\TelegramAccount;
+use App\Models\TelegramOwnerCommand;
 use App\Services\MadelineClientPool;
 use App\Services\TelegramMessagePayloadFactory;
+use App\Services\TelegramOwnerCommandExecutor;
+use App\TelegramOwnerCommandType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
 use Tests\TestCase;
 
 class SourceStatisticsTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_madeline_client_pool_is_a_process_singleton(): void
+    public function test_horizon_has_no_madeline_client_pool(): void
     {
-        $this->assertSame(
-            $this->app->make(MadelineClientPool::class),
-            $this->app->make(MadelineClientPool::class),
-        );
+        $this->assertFalse(class_exists(MadelineClientPool::class));
+        $this->assertFalse($this->app->bound(MadelineClientPool::class));
     }
 
     public function test_raw_telegram_metrics_include_reaction_breakdown(): void
@@ -68,6 +71,7 @@ class SourceStatisticsTest extends TestCase
         $account = TelegramAccount::factory()->create();
         $channel = SourceChannel::factory()->create([
             'telegram_peer_id' => -100123,
+            'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
         $ingest = app(IngestTelegramUpdate::class);
@@ -146,6 +150,47 @@ class SourceStatisticsTest extends TestCase
                 && $job->lookbackHours === 48,
         );
         Queue::assertPushed(SyncSourceChannelStatisticsJob::class, 1);
+    }
+
+    public function test_history_is_fetched_and_ingested_by_the_madeline_owner_executor(): void
+    {
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -100123,
+            'username' => null,
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldReceive('getHistory')
+            ->once()
+            ->with(-100123, 0, 100)
+            ->andReturn([
+                'messages' => [[
+                    '_' => 'message',
+                    'id' => 17,
+                    'date' => now()->timestamp,
+                    'message' => 'Историческая новость',
+                    'views' => 120,
+                    'forwards' => 4,
+                ]],
+            ]);
+        $command = new TelegramOwnerCommand([
+            'telegram_account_id' => $account->id,
+            'type' => TelegramOwnerCommandType::SyncSourceHistory,
+            'payload' => [
+                'source_channel_id' => $channel->id,
+                'lookback_hours' => 24,
+            ],
+        ]);
+
+        $result = app(TelegramOwnerCommandExecutor::class)->execute($command, $client);
+
+        $this->assertSame(['messages' => 1, 'lookback_hours' => 24], $result);
+        $this->assertDatabaseHas('source_posts', [
+            'source_channel_id' => $channel->id,
+            'text' => 'Историческая новость',
+        ]);
+        $this->assertNotNull($channel->fresh()->last_backfilled_at);
     }
 
     public function test_resync_command_only_purges_selected_source_content_and_queues_requested_period(): void

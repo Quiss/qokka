@@ -2,18 +2,24 @@
 
 namespace App\Actions;
 
-use App\Jobs\DownloadMediaAssetJob;
 use App\MediaType;
+use App\Models\MediaAsset;
 use App\Models\SourceChannel;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\TelegramAccount;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class IngestTelegramUpdate
 {
+    public function __construct(
+        private readonly RequestTelegramMediaDownload $requestMediaDownload,
+    ) {}
+
     /** @param array<string, mixed> $payload */
     public function handle(array $payload): ?SourcePost
     {
@@ -108,7 +114,7 @@ class IngestTelegramUpdate
                 $messageValues,
             );
 
-            $mediaJobs = [];
+            $mediaRequests = [];
 
             foreach ($isMetricsUpdate ? [] : ($payload['media'] ?? []) as $index => $media) {
                 $type = MediaType::tryFrom($media['type'] ?? '') ?? MediaType::Document;
@@ -154,9 +160,9 @@ class IngestTelegramUpdate
                     $asset->path === null
                     && in_array($type, [MediaType::Photo, MediaType::Animation, MediaType::Document], true)
                 ) {
-                    $mediaJobs[] = [$asset->id, false];
+                    $mediaRequests[] = [$asset->id, false];
                 } elseif ($asset->preview_path === null && $type === MediaType::Video && filled(data_get($asset->metadata, 'thumbnail_type'))) {
-                    $mediaJobs[] = [$asset->id, true];
+                    $mediaRequests[] = [$asset->id, true];
                 }
             }
 
@@ -194,13 +200,21 @@ class IngestTelegramUpdate
             ]);
             $channel->update(['last_event_at' => now()]);
 
-            DB::afterCommit(function () use ($mediaJobs): void {
-                foreach ($mediaJobs as [$assetId, $previewOnly]) {
-                    DownloadMediaAssetJob::dispatch($assetId, $previewOnly)->onQueue(
-                        $previewOnly
-                            ? DownloadMediaAssetJob::BACKGROUND_QUEUE
-                            : DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-                    );
+            DB::afterCommit(function () use ($mediaRequests): void {
+                foreach ($mediaRequests as [$assetId, $previewOnly]) {
+                    $asset = MediaAsset::query()->find($assetId);
+
+                    if ($asset !== null) {
+                        try {
+                            $this->requestMediaDownload->handle($asset, $previewOnly);
+                        } catch (Throwable $exception) {
+                            Log::warning('Telegram media owner command could not be created after ingest.', [
+                                'media_asset_id' => $asset->id,
+                                'preview_only' => $previewOnly,
+                                'error' => $exception->getMessage(),
+                            ]);
+                        }
+                    }
                 }
             });
 

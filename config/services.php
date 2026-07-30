@@ -73,8 +73,6 @@ return [
         'ipv6' => (bool) env('TELEGRAM_IPV6', false),
         'owner_heartbeat_seconds' => (int) env('TELEGRAM_OWNER_HEARTBEAT_SECONDS', 15),
         'owner_lease_ttl_seconds' => (int) env('TELEGRAM_OWNER_LEASE_TTL_SECONDS', 45),
-        'media_lock_seconds' => (int) env('TELEGRAM_MEDIA_LOCK_SECONDS', 420),
-        'media_operation_timeout_seconds' => (float) env('TELEGRAM_MEDIA_OPERATION_TIMEOUT_SECONDS', 285),
         'coordination_cache_store' => env('TELEGRAM_COORDINATION_CACHE_STORE', 'redis'),
         'socks5' => [
             'host' => env('TELEGRAM_SOCKS5_HOST'),

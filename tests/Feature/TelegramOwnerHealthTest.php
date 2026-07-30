@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\TelegramAccount;
+use App\Models\TelegramOwnerCommand;
 use App\Services\MadelineOwnerLease;
+use App\TelegramOwnerCommandStatus;
+use App\TelegramOwnerCommandType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class TelegramOwnerHealthTest extends TestCase
@@ -30,22 +32,26 @@ class TelegramOwnerHealthTest extends TestCase
         $this->artisan('telegram:health')->assertFailed();
     }
 
-    public function test_media_drain_command_reports_a_busy_account_lock(): void
+    public function test_owner_status_reports_pending_and_running_commands(): void
     {
         $account = TelegramAccount::factory()->create();
-        $lock = Cache::store(
-            (string) config('services.telegram.coordination_cache_store'),
-        )->lock('telegram:media-download:'.$account->uuid, 30);
-        $this->assertTrue($lock->get());
+        TelegramOwnerCommand::factory()->for($account)->create([
+            'type' => TelegramOwnerCommandType::DownloadMedia,
+            'status' => TelegramOwnerCommandStatus::Pending,
+        ]);
+        TelegramOwnerCommand::factory()->for($account)->create([
+            'type' => TelegramOwnerCommandType::SyncSourceHistory,
+            'status' => TelegramOwnerCommandStatus::Running,
+        ]);
 
-        $this->artisan('telegram:wait-for-media-downloads', ['--timeout' => 0])
-            ->expectsOutputToContain('Ожидаем завершения media downloads')
-            ->expectsOutputToContain($account->name)
-            ->assertFailed();
-
-        $lock->release();
-
-        $this->artisan('telegram:wait-for-media-downloads', ['--timeout' => 0])
+        $this->artisan('telegram:owner:status')
+            ->expectsTable(
+                ['Аккаунт', 'Тип', 'Статус', 'Количество'],
+                [
+                    [$account->id, 'download_media', 'pending', 1],
+                    [$account->id, 'sync_source_history', 'running', 1],
+                ],
+            )
             ->assertSuccessful();
     }
 }

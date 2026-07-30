@@ -2,46 +2,67 @@
 
 namespace Tests\Unit;
 
-use Amp\Cancellation;
 use Amp\Http\Client\HttpClient;
-use App\Contracts\MadelineClient;
 use App\Models\TelegramAccount;
-use App\Services\MadelineClientFactory;
-use App\Services\MadelineClientPool;
+use App\Models\TelegramOwnerCommand;
+use App\Services\TelegramOwnerCommandDispatcher;
 use App\Telegram\ChannelSourceEventHandler;
-use PHPUnit\Framework\TestCase;
+use App\TelegramOwnerCommandStatus;
+use App\TelegramOwnerCommandType;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use ReflectionMethod;
+use Tests\TestCase;
 
 class MadelineClientPoolTest extends TestCase
 {
-    public function test_it_reuses_one_client_per_telegram_account(): void
-    {
-        $firstClient = $this->fakeClient();
-        $secondClient = $this->fakeClient();
-        $factory = $this->fakeFactory([$firstClient, $secondClient]);
-        $pool = new MadelineClientPool($factory);
-        $firstAccount = new TelegramAccount(['uuid' => 'account-one']);
-        $secondAccount = new TelegramAccount(['uuid' => 'account-two']);
+    use RefreshDatabase;
 
-        $this->assertSame($firstClient, $pool->forAccount($firstAccount));
-        $this->assertSame($firstClient, $pool->forAccount($firstAccount));
-        $this->assertSame($secondClient, $pool->forAccount($secondAccount));
-        $this->assertSame(2, $factory->calls);
+    public function test_it_reuses_one_pending_owner_command_per_account_and_deduplication_key(): void
+    {
+        $account = TelegramAccount::factory()->create();
+        $dispatcher = app(TelegramOwnerCommandDispatcher::class);
+
+        $first = $dispatcher->dispatch(
+            $account,
+            TelegramOwnerCommandType::DownloadMedia,
+            ['media_asset_id' => 10],
+            'media:10:full',
+        );
+        $second = $dispatcher->dispatch(
+            $account,
+            TelegramOwnerCommandType::DownloadMedia,
+            ['media_asset_id' => 10],
+            'media:10:full',
+        );
+
+        $this->assertTrue($first->is($second));
+        $this->assertDatabaseCount('telegram_owner_commands', 1);
     }
 
-    public function test_forget_recreates_a_client_after_a_connection_failure(): void
+    public function test_a_finished_owner_command_is_reset_instead_of_creating_a_duplicate(): void
     {
-        $firstClient = $this->fakeClient();
-        $replacementClient = $this->fakeClient();
-        $factory = $this->fakeFactory([$firstClient, $replacementClient]);
-        $pool = new MadelineClientPool($factory);
-        $account = new TelegramAccount(['uuid' => 'account-one']);
+        $account = TelegramAccount::factory()->create();
+        $command = TelegramOwnerCommand::factory()->for($account)->create([
+            'type' => TelegramOwnerCommandType::DownloadMedia,
+            'status' => TelegramOwnerCommandStatus::Failed,
+            'deduplication_key' => 'media:10:full',
+            'attempts' => 1,
+            'last_error' => 'Telegram failed.',
+        ]);
 
-        $this->assertSame($firstClient, $pool->forAccount($account));
-        $pool->forget($account);
+        $requested = app(TelegramOwnerCommandDispatcher::class)->dispatch(
+            $account,
+            TelegramOwnerCommandType::DownloadMedia,
+            ['media_asset_id' => 10],
+            'media:10:full',
+            maxAttempts: 1,
+        );
 
-        $this->assertSame($replacementClient, $pool->forAccount($account));
-        $this->assertSame(2, $factory->calls);
+        $this->assertTrue($command->is($requested));
+        $this->assertSame(TelegramOwnerCommandStatus::Pending, $requested->status);
+        $this->assertSame(0, $requested->attempts);
+        $this->assertNull($requested->last_error);
+        $this->assertDatabaseCount('telegram_owner_commands', 1);
     }
 
     public function test_telegram_bridge_reuses_a_dedicated_system_dns_http_client(): void
@@ -53,71 +74,5 @@ class MadelineClientPoolTest extends TestCase
 
         $this->assertInstanceOf(HttpClient::class, $first);
         $this->assertSame($first, $second);
-    }
-
-    private function fakeClient(): MadelineClient
-    {
-        return new class implements MadelineClient
-        {
-            public function downloadToFile(
-                mixed $media,
-                string $path,
-                ?Cancellation $cancellation = null,
-            ): string {
-                return $path;
-            }
-
-            public function getChannelMessage(int|string $peer, int $messageId): ?array
-            {
-                return null;
-            }
-
-            public function getHistory(int|string $peer, int $offsetId, int $limit): array
-            {
-                return [];
-            }
-
-            public function getInfo(int|string $peer): array
-            {
-                return [];
-            }
-
-            public function canBanChannelParticipants(int|string $channel): bool
-            {
-                return false;
-            }
-
-            public function getChannelParticipants(int|string $channel, int $offset, int $limit): array
-            {
-                return [];
-            }
-
-            public function banChannelParticipant(int|string $channel, int $participantId): void {}
-
-            public function unbanChannelParticipant(int|string $channel, int $participantId): void {}
-
-            public function joinChannel(int|string $channel): void {}
-
-            public function muteNotifications(int|string $peer): void {}
-        };
-    }
-
-    /**
-     * @param  list<MadelineClient>  $clients
-     */
-    private function fakeFactory(array $clients): MadelineClientFactory
-    {
-        return new class($clients) extends MadelineClientFactory
-        {
-            public int $calls = 0;
-
-            /** @param list<MadelineClient> $clients */
-            public function __construct(private array $clients) {}
-
-            public function make(TelegramAccount $account): MadelineClient
-            {
-                return $this->clients[$this->calls++];
-            }
-        };
     }
 }

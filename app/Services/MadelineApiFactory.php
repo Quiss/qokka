@@ -12,7 +12,6 @@ class MadelineApiFactory
     public function __construct(
         private readonly MadelineSettingsFactory $settingsFactory,
         private readonly MadelineSessionDatabaseSettingsSynchronizer $settingsSynchronizer,
-        private readonly MadelineOwnerLease $ownerLease,
     ) {}
 
     public function makeOwner(TelegramAccount $account): API
@@ -27,25 +26,15 @@ class MadelineApiFactory
             ]);
         }
 
-        return new API($sessionDirectory, $settings);
-    }
+        $api = new API($sessionDirectory, $settings);
 
-    public function makeIpcClient(TelegramAccount $account): API
-    {
-        if (! $this->ownerLease->isFresh($account->uuid)) {
-            throw new MadelineOwnerUnavailableException(
-                "MadelineProto owner lease is unavailable for Telegram account {$account->uuid}.",
-            );
-        }
-
-        $api = new API($this->settingsFactory->sessionPath($account));
-
-        if (! $api->isIpc() || $api->isIpcWorker()) {
+        if ($api->isIpc()) {
             unset($api);
             gc_collect_cycles();
 
             throw new MadelineOwnerUnavailableException(
-                "MadelineProto IPC client connected to an invalid owner for Telegram account {$account->uuid}.",
+                "Сессия {$account->uuid} уже принадлежит другому процессу. "
+                .'Остановите все процессы MadelineProto и запустите telegram:listen заново.',
             );
         }
 

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
 use App\Services\MadelineApiFactory;
+use App\Services\MadelineOwnerLease;
 use App\TelegramAccountStatus;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -15,13 +16,24 @@ use Throwable;
 #[Description('Подключить или повторно авторизовать Telegram-аккаунт MadelineProto')]
 class TelegramAuthorizeAccountCommand extends Command
 {
-    public function handle(MadelineApiFactory $apiFactory): int
-    {
+    public function handle(
+        MadelineApiFactory $apiFactory,
+        MadelineOwnerLease $ownerLease,
+    ): int {
         $name = trim((string) $this->argument('name'));
         $account = TelegramAccount::query()->firstOrCreate(
             ['name' => $name],
             ['status' => TelegramAccountStatus::Pending],
         );
+
+        if ($ownerLease->isFresh($account->uuid)) {
+            $this->error(
+                'Аккаунт сейчас принадлежит telegram:listen. '
+                .'Остановите контейнер madeline перед повторной авторизацией.',
+            );
+
+            return self::FAILURE;
+        }
 
         $this->info('Откройте Telegram на телефоне и отсканируйте QR-код.');
         $this->line('Если QR недоступен, MadelineProto предложит вход по телефону и коду.');

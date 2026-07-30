@@ -2,13 +2,12 @@
 
 namespace Tests\Feature;
 
-use Amp\Cancellation;
 use App\Actions\ApprovePlannedPost;
 use App\Actions\IngestTelegramUpdate;
+use App\Actions\RequestTelegramMediaDownload;
 use App\Contracts\MadelineClient;
 use App\Exceptions\PermanentTelegramMediaException;
 use App\Jobs\DownloadMediaAssetJob;
-use App\Jobs\VerifySourceChannelAccessJob;
 use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
@@ -17,20 +16,17 @@ use App\Models\SourceChannel;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
 use App\Models\TelegramAccount;
+use App\Models\TelegramOwnerCommand;
 use App\Models\User;
 use App\PlannedPostStatus;
-use App\Services\MadelineClientFactory;
-use App\Services\MadelineClientPool;
-use App\Services\MadelineOwnerLease;
-use App\Services\MediaFileGarbageCollector;
 use App\Services\PlannedPostMediaManager;
-use App\Services\TelegramMediaDownloadAccountResolver;
-use App\Services\TelegramMediaDownloadConcurrency;
 use App\Services\TelegramMessagePayloadFactory;
+use App\Services\TelegramOwnerMediaDownloader;
 use App\TelegramAccountStatus;
+use App\TelegramOwnerCommandStatus;
+use App\TelegramOwnerCommandType;
 use App\TelegramSourceAccessStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -38,6 +34,7 @@ use Illuminate\Validation\ValidationException;
 use Mockery;
 use RuntimeException;
 use Tests\TestCase;
+use Throwable;
 
 class TelegramMediaWorkflowTest extends TestCase
 {
@@ -132,11 +129,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame($sourceMessage->id, $asset->source_message_id);
         $this->assertSame($account->id, $sourceMessage->telegram_account_id);
         $this->assertSame(MediaType::Photo, $asset->type);
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id && ! $job->previewOnly,
-        );
+        $this->assertOwnerMediaCommand($asset, TelegramOwnerCommandType::DownloadMedia);
     }
 
     public function test_history_ingestion_queues_video_preview_as_a_background_download(): void
@@ -174,11 +167,7 @@ class TelegramMediaWorkflowTest extends TestCase
 
         $this->assertNotNull($asset);
         $this->assertSame(MediaType::Video, $asset->type);
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::BACKGROUND_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id && $job->previewOnly,
-        );
+        $this->assertOwnerMediaCommand($asset, TelegramOwnerCommandType::DownloadMediaPreview);
     }
 
     public function test_history_ingestion_queues_animation_as_a_full_download(): void
@@ -213,12 +202,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $asset = $sourcePost?->mediaAssets()->firstOrFail();
 
         $this->assertSame(MediaType::Animation, $asset->type);
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id
-                && ! $job->previewOnly,
-        );
+        $this->assertOwnerMediaCommand($asset, TelegramOwnerCommandType::DownloadMedia);
     }
 
     public function test_media_download_fails_immediately_when_the_source_has_no_collector(): void
@@ -246,35 +230,24 @@ class TelegramMediaWorkflowTest extends TestCase
         $sourcePost = app(IngestTelegramUpdate::class)->handle($payload);
         $asset = $sourcePost?->mediaAssets()->firstOrFail();
         $channel->update(['collector_telegram_account_id' => null]);
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldNotReceive('make');
+        TelegramOwnerCommand::query()->delete();
 
         try {
-            $this->runDownloadJob(
-                new DownloadMediaAssetJob($asset->id),
-                new MadelineClientPool($factory),
-            );
+            app(RequestTelegramMediaDownload::class)->handle($asset);
             $this->fail('Media download did not fail.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('нет готового Telegram-аккаунта', $exception->getMessage());
+            $this->assertStringContainsString('не найден Telegram-аккаунт', $exception->getMessage());
         }
 
         $this->assertNull($asset->fresh()->failed_at);
-        $this->assertSame('telegram_account_unavailable', data_get(
-            $asset->fresh()->metadata,
-            'download_last_error.code',
-        ));
-        Queue::assertPushed(
-            VerifySourceChannelAccessJob::class,
-            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $channel->id,
-        );
+        $this->assertDatabaseCount('telegram_owner_commands', 0);
     }
 
     public function test_media_download_falls_back_to_the_message_account_and_repairs_the_collector(): void
     {
         Storage::fake('local');
         $staleCollector = TelegramAccount::factory()->create([
-            'status' => TelegramAccountStatus::Connected,
+            'status' => TelegramAccountStatus::Error,
             'last_seen_at' => now()->subMinutes(10),
         ]);
         $messageAccount = TelegramAccount::factory()->create();
@@ -305,8 +278,6 @@ class TelegramMediaWorkflowTest extends TestCase
             'downloaded_at' => null,
             'mime_type' => 'image/jpeg',
         ]);
-        app(MadelineOwnerLease::class)->heartbeat($messageAccount->uuid);
-        $downloadCancellation = null;
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')->once()->andReturn([
             '_' => 'message',
@@ -315,35 +286,20 @@ class TelegramMediaWorkflowTest extends TestCase
         ]);
         $client->shouldReceive('downloadToFile')
             ->once()
-            ->andReturnUsing(function (
-                mixed $media,
-                string $path,
-                ?Cancellation $cancellation,
-            ) use (&$downloadCancellation): string {
-                $downloadCancellation = $cancellation;
+            ->andReturnUsing(function (mixed $media, string $path): string {
                 File::put($path, 'downloaded');
 
                 return $path;
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')
-            ->once()
-            ->with(Mockery::on(fn (TelegramAccount $account): bool => $account->is($messageAccount)))
-            ->andReturn($client);
+        $command = app(RequestTelegramMediaDownload::class)->handle($asset);
+        $this->runOwnerDownload($asset, $client);
 
-        (new DownloadMediaAssetJob($asset->id))->handle(
-            new MadelineClientPool($factory),
-            app(MediaFileGarbageCollector::class),
-            app(TelegramMediaDownloadAccountResolver::class),
-            app(TelegramMediaDownloadConcurrency::class),
-        );
-
+        $this->assertSame($messageAccount->id, $command->telegram_account_id);
         $this->assertSame($messageAccount->id, $channel->fresh()->collector_telegram_account_id);
         $this->assertNotNull($asset->fresh()->path);
-        $this->assertInstanceOf(Cancellation::class, $downloadCancellation);
     }
 
-    public function test_media_download_fails_immediately_when_the_account_lock_is_busy(): void
+    public function test_duplicate_media_requests_reuse_the_same_owner_command(): void
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
@@ -370,32 +326,47 @@ class TelegramMediaWorkflowTest extends TestCase
             'path' => null,
             'downloaded_at' => null,
         ]);
-        app(MadelineOwnerLease::class)->heartbeat($account->uuid);
-        $lock = Cache::store(
-            (string) config('services.telegram.coordination_cache_store'),
-        )->lock('telegram:media-download:'.$account->uuid, 30);
-        $this->assertTrue($lock->get());
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldNotReceive('make');
+        $first = app(RequestTelegramMediaDownload::class)->handle($asset);
+        $second = app(RequestTelegramMediaDownload::class)->handle($asset);
 
-        try {
-            (new DownloadMediaAssetJob($asset->id))->handle(
-                new MadelineClientPool($factory),
-                app(MediaFileGarbageCollector::class),
-                app(TelegramMediaDownloadAccountResolver::class),
-                app(TelegramMediaDownloadConcurrency::class),
-            );
-            $this->fail('Media download did not fail.');
-        } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('уже использует', $exception->getMessage());
-        } finally {
-            $lock->release();
-        }
+        $this->assertTrue($first->is($second));
+        $this->assertDatabaseCount('telegram_owner_commands', 1);
+        $this->assertSame(1, $first->max_attempts);
+    }
 
-        $this->assertSame('telegram_account_busy', data_get(
-            $asset->fresh()->metadata,
-            'download_last_error.code',
-        ));
+    public function test_missing_media_backlog_does_not_retry_terminal_failures_implicitly(): void
+    {
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'telegram_account_id' => $account->id,
+            'external_message_id' => 100,
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'path' => null,
+            'downloaded_at' => null,
+            'failed_at' => now(),
+            'metadata' => ['download_error' => 'Terminal Telegram failure.'],
+        ]);
+
+        $this->artisan('telegram:media:request-missing')->assertSuccessful();
+        $this->assertDatabaseCount('telegram_owner_commands', 0);
+
+        $this->artisan('telegram:media:request-missing', [
+            '--include-failed' => true,
+        ])->assertSuccessful();
+
+        $this->assertOwnerMediaCommand($asset, TelegramOwnerCommandType::DownloadMedia);
+        $this->assertNull($asset->fresh()->failed_at);
     }
 
     public function test_missing_source_message_is_a_permanent_failure(): void
@@ -405,17 +376,13 @@ class TelegramMediaWorkflowTest extends TestCase
             'path' => null,
             'downloaded_at' => null,
         ]);
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldNotReceive('make');
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldNotReceive('getChannelMessage');
+        $client->shouldNotReceive('downloadToFile');
 
         $this->expectException(PermanentTelegramMediaException::class);
 
-        (new DownloadMediaAssetJob($asset->id))->handle(
-            new MadelineClientPool($factory),
-            app(MediaFileGarbageCollector::class),
-            app(TelegramMediaDownloadAccountResolver::class),
-            app(TelegramMediaDownloadConcurrency::class),
-        );
+        $this->runOwnerDownload($asset, $client);
     }
 
     public function test_live_and_history_payloads_update_the_same_media_slot(): void
@@ -500,7 +467,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertNotNull($asset);
         $this->assertSame('telegram/downloaded.jpg', $asset->path);
         $this->assertSame(str_repeat('b', 64), $asset->checksum);
-        Queue::assertNotPushed(DownloadMediaAssetJob::class);
+        $this->assertDatabaseCount('telegram_owner_commands', 0);
     }
 
     public function test_editor_can_mix_and_order_media_from_multiple_sources(): void
@@ -532,16 +499,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $selected = $post->mediaAssets()->orderBy('sort_order')->get();
         $this->assertSame([$secondAsset->id, $firstAsset->id], $selected->pluck('origin_media_asset_id')->all());
         $this->assertSame([0, 1], $selected->pluck('sort_order')->all());
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $firstAsset->id,
-        );
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $secondAsset->id,
-        );
+        Queue::assertNotPushed(DownloadMediaAssetJob::class);
     }
 
     public function test_animation_cannot_be_mixed_with_other_selected_media(): void
@@ -629,7 +587,7 @@ class TelegramMediaWorkflowTest extends TestCase
         }
     }
 
-    public function test_download_jobs_reuse_one_pooled_client_for_the_same_account(): void
+    public function test_owner_downloads_reuse_the_same_live_madeline_client(): void
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
@@ -689,12 +647,8 @@ class TelegramMediaWorkflowTest extends TestCase
 
                 return $path;
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
-
-        $this->runDownloadJob(new DownloadMediaAssetJob($firstAsset->id), $pool);
-        $this->runDownloadJob(new DownloadMediaAssetJob($secondAsset->id), $pool);
+        $this->runOwnerDownload($firstAsset, $client);
+        $this->runOwnerDownload($secondAsset, $client);
 
         $this->assertNotNull($firstAsset->fresh()->path);
         $this->assertNotNull($secondAsset->fresh()->path);
@@ -703,7 +657,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame([100, 101], $downloadedMessageIds);
     }
 
-    public function test_download_job_removes_permanently_unavailable_media_from_planned_posts(): void
+    public function test_owner_download_marks_permanently_unavailable_media_without_deleting_editor_data(): void
     {
         Storage::fake('local');
         Storage::disk('local')->put('telegram/previews/unavailable.jpg', 'preview');
@@ -760,21 +714,22 @@ class TelegramMediaWorkflowTest extends TestCase
             ->with(-100123, 100)
             ->andReturnNull();
         $client->shouldNotReceive('downloadToFile');
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
+        try {
+            $this->runOwnerDownload($origin, $client);
+            $this->fail('Unavailable Telegram media should fail permanently.');
+        } catch (PermanentTelegramMediaException) {
+            $this->addToAssertionCount(1);
+        }
 
-        $this->runDownloadJob(
-            new DownloadMediaAssetJob($origin->id),
-            $pool,
-        );
-
-        $this->assertModelMissing($origin);
-        $this->assertModelMissing($firstSelection);
-        $this->assertModelMissing($secondSelection);
-        $this->assertSame(0, $firstPlannedPost->mediaAssets()->count());
-        $this->assertSame(0, $secondPlannedPost->mediaAssets()->count());
-        Storage::disk('local')->assertMissing('telegram/previews/unavailable.jpg');
+        $this->assertModelExists($origin);
+        $this->assertModelExists($firstSelection);
+        $this->assertModelExists($secondSelection);
+        $this->assertNotNull($origin->fresh()->failed_at);
+        $this->assertNotNull($firstSelection->fresh()->failed_at);
+        $this->assertNotNull($secondSelection->fresh()->failed_at);
+        $this->assertSame(1, $firstPlannedPost->mediaAssets()->count());
+        $this->assertSame(1, $secondPlannedPost->mediaAssets()->count());
+        Storage::disk('local')->assertExists('telegram/previews/unavailable.jpg');
     }
 
     public function test_missing_preview_source_keeps_an_already_downloaded_video(): void
@@ -821,14 +776,12 @@ class TelegramMediaWorkflowTest extends TestCase
             ->with(-100123, 100)
             ->andReturn(['_' => 'message', 'id' => 100]);
         $client->shouldNotReceive('downloadToFile');
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
-
-        $this->runDownloadJob(
-            new DownloadMediaAssetJob($origin->id, previewOnly: true),
-            $pool,
-        );
+        try {
+            $this->runOwnerDownload($origin, $client, previewOnly: true);
+            $this->fail('Missing Telegram preview should fail permanently.');
+        } catch (PermanentTelegramMediaException) {
+            $this->addToAssertionCount(1);
+        }
 
         $this->assertModelExists($origin);
         $this->assertModelExists($selection);
@@ -883,12 +836,8 @@ class TelegramMediaWorkflowTest extends TestCase
 
                 throw new RuntimeException('VOLUME_LOC_NOT_FOUND');
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
-
         try {
-            $this->runDownloadJob(new DownloadMediaAssetJob($asset->id), $pool);
+            $this->runOwnerDownload($asset, $client);
             $this->fail('The Telegram CDN failure should be propagated to the queue worker.');
         } catch (RuntimeException $exception) {
             $this->assertSame('VOLUME_LOC_NOT_FOUND', $exception->getMessage());
@@ -953,11 +902,7 @@ class TelegramMediaWorkflowTest extends TestCase
 
                 return $path;
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
-
-        $this->runDownloadJob(new DownloadMediaAssetJob($asset->id), $pool);
+        $this->runOwnerDownload($asset, $client);
 
         $asset->refresh();
         $selectedAsset->refresh();
@@ -1013,11 +958,7 @@ class TelegramMediaWorkflowTest extends TestCase
 
                 return $path;
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
-
-        $this->runDownloadJob(new DownloadMediaAssetJob($asset->id), $pool);
+        $this->runOwnerDownload($asset, $client);
 
         $asset->refresh();
         $this->assertNotNull($asset->path);
@@ -1069,9 +1010,6 @@ class TelegramMediaWorkflowTest extends TestCase
 
                 return $path;
             });
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')->once()->andReturn($client);
-        $pool = new MadelineClientPool($factory);
         set_error_handler(
             static function (int $level, string $message): never {
                 throw new RuntimeException($message, $level);
@@ -1079,7 +1017,7 @@ class TelegramMediaWorkflowTest extends TestCase
         );
 
         try {
-            $this->runDownloadJob(new DownloadMediaAssetJob($asset->id), $pool);
+            $this->runOwnerDownload($asset, $client);
         } finally {
             restore_error_handler();
         }
@@ -1127,10 +1065,10 @@ class TelegramMediaWorkflowTest extends TestCase
             'mime_type' => 'video/mp4',
         ]);
 
-        $this->runDownloadJob(
-            new DownloadMediaAssetJob($selectedAsset->id),
-            app(MadelineClientPool::class),
-        );
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldNotReceive('getChannelMessage');
+        $client->shouldNotReceive('downloadToFile');
+        $this->runOwnerDownload($selectedAsset, $client);
 
         $selectedAsset->refresh();
         $this->assertSame('telegram/video.mp4', $selectedAsset->path);
@@ -1174,31 +1112,38 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame('telegram/video.mp4', $selectedAsset->fresh()->path);
     }
 
-    private function runDownloadJob(DownloadMediaAssetJob $job, MadelineClientPool $clientPool): void
-    {
-        $asset = MediaAsset::query()
-            ->with('originMediaAsset.sourceMessage.sourceChannel.collectorTelegramAccount', 'sourceMessage.sourceChannel.collectorTelegramAccount')
-            ->findOrFail($job->mediaAssetId);
-        $origin = $asset->originMediaAsset ?? $asset;
-        $sourceChannel = $origin->sourceMessage?->sourceChannel;
-        $account = $sourceChannel?->collectorTelegramAccount;
+    private function runOwnerDownload(
+        MediaAsset $asset,
+        MadelineClient $client,
+        bool $previewOnly = false,
+    ): void {
+        $command = new TelegramOwnerCommand([
+            'type' => $previewOnly
+                ? TelegramOwnerCommandType::DownloadMediaPreview
+                : TelegramOwnerCommandType::DownloadMedia,
+            'payload' => ['media_asset_id' => $asset->id],
+        ]);
+        $downloader = app(TelegramOwnerMediaDownloader::class);
 
-        if ($sourceChannel !== null && $account !== null) {
-            $sourceChannel->telegramAccounts()->syncWithoutDetaching([
-                $account->id => [
-                    'access_status' => TelegramSourceAccessStatus::Available->value,
-                    'last_checked_at' => now(),
-                    'last_error' => null,
-                ],
-            ]);
-            app(MadelineOwnerLease::class)->heartbeat($account->uuid);
+        try {
+            $downloader->handle($command, $client, $previewOnly);
+        } catch (Throwable $exception) {
+            $downloader->recordFailure($command, $exception, $previewOnly);
+
+            throw $exception;
         }
+    }
 
-        $job->handle(
-            $clientPool,
-            app(MediaFileGarbageCollector::class),
-            app(TelegramMediaDownloadAccountResolver::class),
-            app(TelegramMediaDownloadConcurrency::class),
-        );
+    private function assertOwnerMediaCommand(
+        MediaAsset $asset,
+        TelegramOwnerCommandType $type,
+    ): void {
+        $command = TelegramOwnerCommand::query()
+            ->where('type', $type)
+            ->where('payload->media_asset_id', $asset->id)
+            ->firstOrFail();
+
+        $this->assertSame(TelegramOwnerCommandStatus::Pending, $command->status);
+        $this->assertSame(1, $command->max_attempts);
     }
 }

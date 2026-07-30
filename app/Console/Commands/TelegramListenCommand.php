@@ -57,20 +57,9 @@ class TelegramListenCommand extends Command
                         $account->uuid => new MadelineProtoListenerSession(
                             $apiFactory->makeOwner($account),
                             $account->uuid,
-                            $ownerLease,
                         ),
                     ])
                     ->all();
-                $remoteAccounts = $accounts
-                    ->filter(fn (TelegramAccount $account): bool => $sessions[$account->uuid]->isRemote());
-
-                if ($remoteAccounts->isNotEmpty()) {
-                    $this->warn(
-                        'Передаю EventHandler из IPC worker в контейнер madeline для аккаунтов: '
-                        .$remoteAccounts->pluck('name')->join(', ')
-                        .'.',
-                    );
-                }
 
                 try {
                     $listenerSupervisor->run($sessions, ChannelSourceEventHandler::class);

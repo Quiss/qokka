@@ -11,25 +11,18 @@ final class MadelineProtoListenerSession implements MadelineListenerSession
     public function __construct(
         private readonly API $api,
         private readonly string $telegramAccountUuid,
-        private readonly MadelineOwnerLease $ownerLease,
     ) {}
 
     public function isRemote(): bool
     {
-        return $this->api->isIpc();
+        return false;
     }
 
     public function assertCanTakeOver(): void
     {
-        if ($this->api->isIpc() && ! $this->api->isIpcWorker()) {
+        if ($this->api->isIpc()) {
             throw new MadelineOwnerUnavailableException(
-                'MadelineProto session is owned by another foreground process and cannot be taken over safely.',
-            );
-        }
-
-        if ($this->api->isIpc() && $this->ownerLease->isFresh($this->telegramAccountUuid)) {
-            throw new MadelineOwnerUnavailableException(
-                'MadelineProto IPC worker still has a fresh foreground owner lease.',
+                "Telegram-сессия {$this->telegramAccountUuid} открылась через IPC вместо локального owner.",
             );
         }
     }
@@ -37,10 +30,6 @@ final class MadelineProtoListenerSession implements MadelineListenerSession
     public function prepareForTakeover(): void
     {
         $this->assertCanTakeOver();
-
-        if ($this->api->isIpc() && $this->api->hasEventHandler()) {
-            $this->api->unsetEventHandler();
-        }
     }
 
     public function api(): API

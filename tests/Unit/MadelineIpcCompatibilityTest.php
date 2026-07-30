@@ -2,71 +2,26 @@
 
 namespace Tests\Unit;
 
-use App\Services\MadelineIpcCompatibility;
-use ErrorException;
+use App\Contracts\MadelineClient;
+use App\Services\MadelineApiFactory;
+use App\Services\MadelineProtoClient;
+use App\Telegram\ChannelSourceEventHandler;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 
 class MadelineIpcCompatibilityTest extends TestCase
 {
-    public function test_it_suppresses_the_php_85_string_increment_deprecation(): void
+    public function test_application_factory_exposes_only_the_session_owner_entrypoint(): void
     {
-        $previousHandler = set_error_handler(
-            static fn (
-                int $severity,
-                string $message,
-                string $file,
-                int $line,
-            ): never => throw new ErrorException($message, 0, $severity, $file, $line),
-        );
+        $factory = new ReflectionClass(MadelineApiFactory::class);
 
-        try {
-            $result = (new MadelineIpcCompatibility)->runWithCancellation(
-                static function (): string {
-                    $id = 'a';
-                    $id++;
-
-                    return $id;
-                },
-            );
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertSame('b', $result);
-        $this->assertSame($previousHandler, $this->currentErrorHandler());
+        $this->assertTrue($factory->hasMethod('makeOwner'));
+        $this->assertFalse($factory->hasMethod('makeIpcClient'));
     }
 
-    public function test_it_delegates_unrelated_errors_to_the_previous_handler(): void
+    public function test_only_the_madeline_event_handler_implements_the_rpc_client_contract(): void
     {
-        $caughtException = null;
-        set_error_handler(
-            static fn (
-                int $severity,
-                string $message,
-                string $file,
-                int $line,
-            ): never => throw new ErrorException($message, 0, $severity, $file, $line),
-        );
-
-        try {
-            (new MadelineIpcCompatibility)->runWithCancellation(
-                static fn (): bool => trigger_error('Unrelated warning.', E_USER_WARNING),
-            );
-        } catch (ErrorException $exception) {
-            $caughtException = $exception;
-        } finally {
-            restore_error_handler();
-        }
-
-        $this->assertInstanceOf(ErrorException::class, $caughtException);
-        $this->assertSame('Unrelated warning.', $caughtException->getMessage());
-    }
-
-    private function currentErrorHandler(): ?callable
-    {
-        $currentHandler = set_error_handler(static fn (): bool => false);
-        restore_error_handler();
-
-        return $currentHandler;
+        $this->assertTrue(is_a(ChannelSourceEventHandler::class, MadelineClient::class, true));
+        $this->assertFalse(class_exists(MadelineProtoClient::class));
     }
 }

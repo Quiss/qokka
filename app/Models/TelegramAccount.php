@@ -28,6 +28,7 @@ use Illuminate\Support\Str;
  * @property string|null $last_error
  * @property-read Collection<int, SourceChannel> $sourceChannels
  * @property-read Collection<int, SourceChannel> $assignedSourceChannels
+ * @property-read Collection<int, TelegramOwnerCommand> $ownerCommands
  */
 #[Fillable(['uuid', 'name', 'telegram_user_id', 'username', 'phone_hint', 'status', 'is_active', 'authorized_at', 'last_seen_at', 'last_error'])]
 class TelegramAccount extends Model
@@ -59,6 +60,12 @@ class TelegramAccount extends Model
     public function assignedSourceChannels(): HasMany
     {
         return $this->hasMany(SourceChannel::class, 'collector_telegram_account_id');
+    }
+
+    /** @return HasMany<TelegramOwnerCommand, $this> */
+    public function ownerCommands(): HasMany
+    {
+        return $this->hasMany(TelegramOwnerCommand::class);
     }
 
     public function isHeartbeatFresh(): bool

@@ -15,11 +15,8 @@ GID := $(shell id -g)
 PWD := $(shell pwd)
 PHP_BOOTSTRAP_IMAGE ?= serversideup/php:8.5-cli
 PUBLISH_DRAIN_TIMEOUT ?= 620
-MEDIA_DOWNLOAD_DRAIN_TIMEOUT ?= 430
 PUBLISH_QUEUE ?= redis:publish
 TELEGRAM_QUEUE ?= redis:telegram
-MEDIA_DOWNLOAD_HIGH_QUEUE ?= redis:media-download-high
-MEDIA_DOWNLOAD_LOW_QUEUE ?= redis:media-download-low
 POSTGRES_MIN_CONNECTIONS ?= 200
 PHP_BOOTSTRAP := docker run --rm \
 	--user "$(UID):$(GID)" \
@@ -46,23 +43,23 @@ deploy:
 	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:pause; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
-	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
-	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
-	echo "Waiting for active Telegram media downloads (timeout: $(MEDIA_DOWNLOAD_DRAIN_TIMEOUT)s)..."; \
-	$(PRODUCTION_COMPOSE) exec app php artisan telegram:wait-for-media-downloads --timeout=$(MEDIA_DOWNLOAD_DRAIN_TIMEOUT); \
 	$(PRODUCTION_COMPOSE) stop --timeout 370 horizon; \
 	$(PRODUCTION_COMPOSE) stop --timeout 120 madeline; \
 	git pull; \
 	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
-	$(MAKE) reconcile-containers; \
-	$(PRODUCTION_COMPOSE) exec madeline php artisan telegram:health --no-interaction; \
+	$(PRODUCTION_COMPOSE) exec app php artisan telegram:media:request-missing --include-failed; \
+	$(PRODUCTION_COMPOSE) exec app php artisan horizon:clear --queue=media-download-high; \
+	$(PRODUCTION_COMPOSE) exec app php artisan horizon:clear --queue=media-download-low; \
+	$(PRODUCTION_COMPOSE) up -d --remove-orphans --wait --wait-timeout 180 app pgsql redis; \
+	$(MAKE) verify-postgres-capacity; \
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
-	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
-	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE); \
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 madeline; \
+	$(PRODUCTION_COMPOSE) exec madeline php artisan telegram:health --no-interaction; \
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 horizon; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
 	DEPLOY_READY=1; \

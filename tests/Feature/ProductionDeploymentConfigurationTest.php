@@ -3,10 +3,8 @@
 namespace Tests\Feature;
 
 use App\Jobs\DownloadMediaAssetJob;
-use Illuminate\Queue\Middleware\FailOnException;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
-use RuntimeException;
 use Tests\TestCase;
 
 class ProductionDeploymentConfigurationTest extends TestCase
@@ -19,8 +17,6 @@ class ProductionDeploymentConfigurationTest extends TestCase
         foreach ([
             'PUBLISH_QUEUE',
             'TELEGRAM_QUEUE',
-            'MEDIA_DOWNLOAD_HIGH_QUEUE',
-            'MEDIA_DOWNLOAD_LOW_QUEUE',
         ] as $queueVariable) {
             $this->assertStringContainsString(
                 "queue:pause \$({$queueVariable})",
@@ -31,54 +27,37 @@ class ProductionDeploymentConfigurationTest extends TestCase
                 substr_count($deploy, "queue:continue \$({$queueVariable})"),
             );
         }
+
+        $this->assertStringNotContainsString('MEDIA_DOWNLOAD_', $deploy);
     }
 
-    public function test_media_downloads_use_one_strictly_ordered_supervisor_with_safe_timeouts(): void
+    public function test_horizon_has_no_media_download_supervisor_or_madeline_dependency(): void
     {
         $telegramSupervisor = config('horizon.environments.production.supervisor-telegram');
-        $mediaSupervisor = config('horizon.environments.production.supervisor-media-download');
         $job = new DownloadMediaAssetJob(1);
-        $retryAfter = config('queue.connections.redis.retry_after');
-        $operationTimeout = config('services.telegram.media_operation_timeout_seconds');
+        $compose = File::get(base_path('docker-compose.production.yml'));
+        $horizon = Str::between($compose, "  horizon:\n", "\n  # MadelineProto");
 
         $this->assertSame(['telegram'], $telegramSupervisor['queue']);
         $this->assertSame(3, $telegramSupervisor['maxProcesses']);
-        $this->assertSame([
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::BACKGROUND_QUEUE,
-        ], $mediaSupervisor['queue']);
-        $this->assertFalse($mediaSupervisor['balance']);
-        $this->assertSame(1, $mediaSupervisor['maxProcesses']);
-        $this->assertSame(1, $mediaSupervisor['tries']);
-        $this->assertSame(360, $mediaSupervisor['timeout']);
-        $this->assertIsInt($retryAfter);
-        $this->assertIsFloat($operationTimeout);
+        $this->assertArrayNotHasKey(
+            'supervisor-media-download',
+            config('horizon.environments.production'),
+        );
         $this->assertSame(1, $job->tries);
-        $this->assertSame(7200, $job->uniqueFor);
         $this->assertFalse(method_exists($job, 'retryUntil'));
-        $this->assertContainsOnlyInstancesOf(FailOnException::class, $job->middleware());
-        $this->assertTrue($operationTimeout < $job->timeout);
-        $this->assertTrue($job->timeout < $mediaSupervisor['timeout']);
-        $this->assertTrue($mediaSupervisor['timeout'] < $retryAfter);
+        $this->assertFalse(method_exists($job, 'middleware'));
+        $this->assertStringNotContainsString('madeline:', $horizon);
     }
 
-    public function test_media_download_job_fails_on_the_first_exception(): void
+    public function test_legacy_media_job_has_no_retry_or_ipc_surface(): void
     {
-        $job = (new DownloadMediaAssetJob(1))->withFakeQueueInteractions();
-        $exception = new RuntimeException('Telegram IPC failed.');
+        $job = new DownloadMediaAssetJob(1);
 
-        try {
-            $job->middleware()[0]->handle(
-                $job,
-                static fn (): never => throw $exception,
-            );
-            $this->fail('The media download middleware did not propagate the exception.');
-        } catch (RuntimeException $thrownException) {
-            $this->assertSame($exception, $thrownException);
-        }
-
-        $job->assertFailedWith($exception);
-        $job->assertNotReleased();
+        $this->assertSame(1, $job->tries);
+        $this->assertFalse(property_exists($job, 'backoff'));
+        $this->assertFalse(property_exists($job, 'timeout'));
+        $this->assertFalse(method_exists($job, 'retryUntil'));
     }
 
     public function test_deploy_stops_workers_before_updating_code_and_resumes_after_readiness(): void
@@ -92,37 +71,39 @@ class ProductionDeploymentConfigurationTest extends TestCase
         );
 
         $pauseHorizonPosition = strpos($deploy, 'exec horizon php artisan horizon:pause');
-        $waitForMediaPosition = strpos($deploy, 'telegram:wait-for-media-downloads');
         $stopHorizonPosition = strpos($deploy, 'stop --timeout 370 horizon');
         $stopMadelinePosition = strpos($deploy, 'stop --timeout 120 madeline');
         $composerInstallPosition = strpos($deploy, 'composer install');
         $migratePosition = strpos($deploy, 'artisan migrate --force');
-        $reconcilePosition = strpos($deploy, '$(MAKE) reconcile-containers');
+        $requestMissingPosition = strpos($deploy, 'telegram:media:request-missing');
+        $clearHighPosition = strpos($deploy, 'horizon:clear --queue=media-download-high');
+        $startMadelinePosition = strpos($deploy, 'up -d --wait --wait-timeout 180 madeline');
         $healthPosition = strpos($deploy, 'exec madeline php artisan telegram:health');
+        $startHorizonPosition = strpos($deploy, 'up -d --wait --wait-timeout 180 horizon');
         $continueTelegramPosition = strrpos($deploy, 'queue:continue $(TELEGRAM_QUEUE)');
 
         $this->assertIsInt($pauseHorizonPosition);
-        $this->assertIsInt($waitForMediaPosition);
         $this->assertIsInt($stopHorizonPosition);
         $this->assertIsInt($stopMadelinePosition);
         $this->assertIsInt($composerInstallPosition);
         $this->assertIsInt($migratePosition);
-        $this->assertIsInt($reconcilePosition);
+        $this->assertIsInt($requestMissingPosition);
+        $this->assertIsInt($clearHighPosition);
+        $this->assertIsInt($startMadelinePosition);
         $this->assertIsInt($healthPosition);
+        $this->assertIsInt($startHorizonPosition);
         $this->assertIsInt($continueTelegramPosition);
-        $this->assertTrue($pauseHorizonPosition < $waitForMediaPosition);
-        $this->assertTrue($waitForMediaPosition < $stopHorizonPosition);
+        $this->assertTrue($pauseHorizonPosition < $stopHorizonPosition);
         $this->assertTrue($stopHorizonPosition < $stopMadelinePosition);
         $this->assertTrue($stopMadelinePosition < $composerInstallPosition);
         $this->assertTrue($composerInstallPosition < $migratePosition);
-        $this->assertTrue($migratePosition < $reconcilePosition);
-        $this->assertTrue($reconcilePosition < $healthPosition);
+        $this->assertTrue($migratePosition < $requestMissingPosition);
+        $this->assertTrue($requestMissingPosition < $clearHighPosition);
+        $this->assertTrue($clearHighPosition < $startMadelinePosition);
+        $this->assertTrue($startMadelinePosition < $healthPosition);
+        $this->assertTrue($healthPosition < $startHorizonPosition);
         $this->assertTrue($healthPosition < $continueTelegramPosition);
         $this->assertStringContainsString('horizon:terminate', $restartHorizon);
-        $this->assertStringContainsString(
-            'Waiting for active Telegram media downloads',
-            $deploy,
-        );
         $this->assertStringContainsString('queues remain paused', $deploy);
         $this->assertStringNotContainsString('composer reinstall amphp/postgres', $deploy);
         $this->assertStringNotContainsString('$(MAKE) restart-madeline', $deploy);

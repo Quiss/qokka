@@ -255,30 +255,12 @@ return [
                 'tries' => 3,
                 'timeout' => 360,
             ],
-            'supervisor-media-download' => [
-                'connection' => 'redis',
-                'queue' => ['media-download-high', 'media-download-low'],
-                'balance' => false,
-                'maxProcesses' => 1,
-                'memory' => 512,
-                'tries' => 1,
-                'timeout' => 360,
-            ],
         ],
 
         'local' => [
             'supervisor-default' => [
                 'queue' => ['default', 'ingest', 'telegram', 'publish'],
                 'maxProcesses' => 3,
-            ],
-            'supervisor-media-download' => [
-                'connection' => 'redis',
-                'queue' => ['media-download-high', 'media-download-low'],
-                'balance' => false,
-                'maxProcesses' => 1,
-                'memory' => 512,
-                'tries' => 1,
-                'timeout' => 360,
             ],
             'supervisor-ai' => [
                 'connection' => 'redis',

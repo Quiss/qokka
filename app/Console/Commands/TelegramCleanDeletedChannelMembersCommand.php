@@ -2,33 +2,30 @@
 
 namespace App\Console\Commands;
 
-use App\Actions\FindDeletedTelegramChannelParticipants;
-use App\Contracts\MadelineClient;
 use App\Models\SourceChannel;
 use App\Models\TelegramAccount;
-use App\Services\MadelineClientPool;
+use App\Models\TelegramOwnerCommand;
+use App\Services\TelegramOwnerCommandDispatcher;
 use App\TelegramAccountStatus;
-use danog\MadelineProto\RPCErrorException;
+use App\TelegramOwnerCommandStatus;
+use App\TelegramOwnerCommandType;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Throwable;
 
 #[Signature('telegram:channel:clean-deleted
     {channel : Username канала, например @pokatrend}
     {--account= : ID, имя или username подключённого MadelineProto-аккаунта}
     {--force : Не запрашивать подтверждение}
-    {--dry-run : Только найти удалённые аккаунты, ничего не удаляя}')]
-#[Description('Найти и удалить деактивированные Telegram-аккаунты из канала')]
+    {--dry-run : Только найти удалённые аккаунты, ничего не удаляя}
+    {--timeout=300 : Сколько секунд ждать выполнения owner-команды}')]
+#[Description('Найти и удалить деактивированные Telegram-аккаунты через Madeline owner')]
 class TelegramCleanDeletedChannelMembersCommand extends Command
 {
-    public function handle(
-        MadelineClientPool $clientPool,
-        FindDeletedTelegramChannelParticipants $findDeletedParticipants,
-    ): int {
+    public function handle(TelegramOwnerCommandDispatcher $commandDispatcher): int
+    {
         if ($this->option('force') && $this->option('dry-run')) {
             $this->error('Параметры --force и --dry-run нельзя использовать одновременно.');
 
@@ -50,62 +47,36 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
         }
 
         $channel = '@'.$username;
+        $scan = $commandDispatcher->dispatch(
+            $telegramAccount,
+            TelegramOwnerCommandType::ScanDeletedParticipants,
+            ['channel' => $channel],
+            'cleanup:scan:'.Str::uuid(),
+            priority: 70,
+            maxAttempts: 1,
+        );
+        $scan = $this->waitForCommand($scan);
 
-        try {
-            $client = $clientPool->forAccount($telegramAccount);
-
-            if (! $client->canBanChannelParticipants($channel)) {
-                $this->error(
-                    "Аккаунт {$this->telegramAccountLabel($telegramAccount)} "
-                    ."не имеет права блокировать участников {$channel}.",
-                );
-                Log::warning('Telegram channel cleanup permission denied.', [
-                    'channel' => $channel,
-                    'telegram_account_id' => $telegramAccount->id,
-                ]);
-
-                return self::FAILURE;
-            }
-
-            $deletedParticipants = $findDeletedParticipants->handle($client, $channel);
-        } catch (Throwable $exception) {
-            $clientPool->forget($telegramAccount);
-            $this->error('Не удалось проверить участников канала: '.$this->telegramError($exception));
-            Log::warning('Telegram deleted channel participant scan failed.', [
-                'channel' => $channel,
-                'telegram_account_id' => $telegramAccount->id,
-                'error' => $exception->getMessage(),
-            ]);
-
+        if ($scan === null || $scan->status !== TelegramOwnerCommandStatus::Completed) {
             return self::FAILURE;
         }
 
-        $found = count($deletedParticipants);
-        $this->info("Канал: {$channel}. Найдено удалённых аккаунтов: {$found}.");
+        $participants = array_values(array_filter(
+            is_array($scan->result['participants'] ?? null)
+                ? $scan->result['participants']
+                : [],
+            is_array(...),
+        ));
+        $this->info("Канал: {$channel}. Найдено удалённых аккаунтов: ".count($participants).'.');
 
-        if ($found === 0) {
-            $this->logSummary($channel, $telegramAccount, [
-                'found' => 0,
-                'removed' => 0,
-                'left_banned' => 0,
-                'failed' => 0,
-                'mode' => 'empty',
-            ]);
-
+        if ($participants === []) {
             return self::SUCCESS;
         }
 
-        $this->showPreview($deletedParticipants);
+        $this->showPreview($participants);
 
         if ($this->option('dry-run')) {
             $this->info('Режим dry-run: изменения в Telegram не выполнялись.');
-            $this->logSummary($channel, $telegramAccount, [
-                'found' => $found,
-                'removed' => 0,
-                'left_banned' => 0,
-                'failed' => 0,
-                'mode' => 'dry-run',
-            ]);
 
             return self::SUCCESS;
         }
@@ -113,29 +84,61 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
         if (
             ! $this->option('force')
             && ! $this->confirm(
-                "Удалить найденные деактивированные аккаунты ({$found}) из {$channel} "
-                .'и затем снять с них блокировку?',
+                'Удалить найденные деактивированные аккаунты ('.count($participants)
+                .") из {$channel} и затем снять с них блокировку?",
             )
         ) {
             $this->info('Очистка отменена.');
-            $this->logSummary($channel, $telegramAccount, [
-                'found' => $found,
-                'removed' => 0,
-                'left_banned' => 0,
-                'failed' => 0,
-                'mode' => 'cancelled',
-            ]);
 
             return self::SUCCESS;
         }
 
-        return $this->removeParticipants(
-            $client,
-            $clientPool,
+        $remove = $commandDispatcher->dispatch(
             $telegramAccount,
-            $channel,
-            $deletedParticipants,
+            TelegramOwnerCommandType::RemoveDeletedParticipants,
+            ['channel' => $channel, 'participants' => $participants],
+            'cleanup:remove:'.Str::uuid(),
+            priority: 70,
+            maxAttempts: 1,
         );
+        $remove = $this->waitForCommand($remove);
+
+        if ($remove === null || $remove->status !== TelegramOwnerCommandStatus::Completed) {
+            return self::FAILURE;
+        }
+
+        $removed = (int) ($remove->result['removed'] ?? 0);
+        $failed = (int) ($remove->result['failed'] ?? 0);
+        $this->info("Итог: удалено и разблокировано {$removed}, ошибок {$failed}.");
+
+        return $failed === 0 ? self::SUCCESS : self::FAILURE;
+    }
+
+    private function waitForCommand(TelegramOwnerCommand $command): ?TelegramOwnerCommand
+    {
+        $timeout = max(1, (int) $this->option('timeout'));
+        $deadline = microtime(true) + $timeout;
+        $this->line("Ожидаю Madeline owner command #{$command->id}...");
+
+        do {
+            usleep(250_000);
+            $command->refresh();
+
+            if (in_array($command->status, [
+                TelegramOwnerCommandStatus::Completed,
+                TelegramOwnerCommandStatus::Failed,
+            ], true)) {
+                if ($command->status === TelegramOwnerCommandStatus::Failed) {
+                    $this->error($command->last_error ?: 'Madeline owner command завершилась с ошибкой.');
+                }
+
+                return $command;
+            }
+        } while (microtime(true) < $deadline);
+
+        $this->error("Истёк таймаут ожидания owner-команды #{$command->id}.");
+
+        return null;
     }
 
     private function resolveTelegramAccount(): ?TelegramAccount
@@ -143,8 +146,8 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
         $eligibleAccounts = TelegramAccount::query()
             ->where('is_active', true)
             ->whereIn('status', [
-                TelegramAccountStatus::Authorized->value,
-                TelegramAccountStatus::Connected->value,
+                TelegramAccountStatus::Authorized,
+                TelegramAccountStatus::Connected,
             ])
             ->orderBy('id');
         $selector = trim((string) $this->option('account'));
@@ -169,21 +172,9 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
             return $accounts->first();
         }
 
-        if ($accounts->isEmpty()) {
-            $this->error('Нет активных авторизованных Telegram-аккаунтов.');
-
-            return null;
-        }
-
-        $this->table(
-            ['ID', 'Имя', 'Username'],
-            $accounts->map(fn (TelegramAccount $account): array => [
-                $account->id,
-                $account->name,
-                $account->username ? '@'.$account->username : '—',
-            ])->all(),
-        );
-        $this->error('Найдено несколько аккаунтов. Укажите нужный через --account=');
+        $this->error($accounts->isEmpty()
+            ? 'Нет активных авторизованных Telegram-аккаунтов.'
+            : 'Найдено несколько аккаунтов. Укажите нужный через --account=');
 
         return null;
     }
@@ -206,183 +197,20 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
         });
     }
 
-    /** @param list<array<string, mixed>> $deletedParticipants */
-    private function showPreview(array $deletedParticipants): void
+    /** @param list<array<string, mixed>> $participants */
+    private function showPreview(array $participants): void
     {
-        $preview = array_slice($deletedParticipants, 0, 20);
+        $preview = array_slice($participants, 0, 20);
         $this->table(
             ['#', 'Telegram user ID'],
             array_map(
-                fn (array $participant, int $index): array => [
+                static fn (array $participant, int $index): array => [
                     $index + 1,
-                    (int) $participant['id'],
+                    (int) ($participant['id'] ?? 0),
                 ],
                 $preview,
                 array_keys($preview),
             ),
         );
-
-        if (count($deletedParticipants) > count($preview)) {
-            $remaining = count($deletedParticipants) - count($preview);
-            $this->line("Ещё аккаунтов: {$remaining}.");
-        }
-    }
-
-    /**
-     * @param  list<array<string, mixed>>  $deletedParticipants
-     */
-    private function removeParticipants(
-        MadelineClient $client,
-        MadelineClientPool $clientPool,
-        TelegramAccount $telegramAccount,
-        string $channel,
-        array $deletedParticipants,
-    ): int {
-        $removed = 0;
-        $leftBanned = 0;
-        $failed = 0;
-        $aborted = false;
-        $progressBar = $this->output->createProgressBar(count($deletedParticipants));
-        $progressBar->start();
-
-        foreach ($deletedParticipants as $participant) {
-            $participantId = (int) $participant['id'];
-
-            try {
-                $client->banChannelParticipant($channel, $participantId);
-            } catch (Throwable $exception) {
-                if ($this->isAlreadyAbsent($exception)) {
-                    $removed++;
-                    $progressBar->advance();
-
-                    continue;
-                }
-
-                $failed++;
-                $this->newLine();
-                $this->warn(
-                    "Не удалось удалить Telegram user ID {$participantId}: "
-                    .$this->telegramError($exception),
-                );
-                $progressBar->advance();
-
-                if ($this->mustAbort($exception)) {
-                    $aborted = true;
-                    $clientPool->forget($telegramAccount);
-
-                    break;
-                }
-
-                continue;
-            }
-
-            try {
-                $client->unbanChannelParticipant($channel, $participantId);
-                $removed++;
-            } catch (Throwable $exception) {
-                if ($this->isAlreadyAbsent($exception)) {
-                    $removed++;
-                } else {
-                    $leftBanned++;
-                    $this->newLine();
-                    $this->warn(
-                        "Аккаунт {$participantId} удалён, но снять блокировку не удалось: "
-                        .$this->telegramError($exception),
-                    );
-
-                    if ($this->mustAbort($exception)) {
-                        $aborted = true;
-                        $clientPool->forget($telegramAccount);
-                    }
-                }
-            }
-
-            $progressBar->advance();
-
-            if ($aborted) {
-                break;
-            }
-        }
-
-        $progressBar->finish();
-        $this->newLine(2);
-
-        $found = count($deletedParticipants);
-        $this->info(
-            "Итог: найдено {$found}, удалено и разблокировано {$removed}, "
-            ."осталось в бан-листе {$leftBanned}, ошибок {$failed}.",
-        );
-
-        if ($aborted) {
-            $this->error('Очистка остановлена из-за критической ошибки Telegram.');
-        }
-
-        $this->logSummary($channel, $telegramAccount, [
-            'found' => $found,
-            'removed' => $removed,
-            'left_banned' => $leftBanned,
-            'failed' => $failed,
-            'aborted' => $aborted,
-            'mode' => 'apply',
-        ]);
-
-        return $aborted || $leftBanned > 0 || $failed > 0
-            ? self::FAILURE
-            : self::SUCCESS;
-    }
-
-    private function isAlreadyAbsent(Throwable $exception): bool
-    {
-        return $exception instanceof RPCErrorException
-            && $exception->rpc === 'USER_NOT_PARTICIPANT';
-    }
-
-    private function mustAbort(Throwable $exception): bool
-    {
-        if (! $exception instanceof RPCErrorException) {
-            return true;
-        }
-
-        return Str::startsWith($exception->rpc, [
-            'FLOOD_WAIT_',
-            'FLOOD_PREMIUM_WAIT_',
-        ]) || in_array($exception->rpc, [
-            'AUTH_KEY_UNREGISTERED',
-            'CHANNEL_INVALID',
-            'CHANNEL_PRIVATE',
-            'CHAT_ADMIN_REQUIRED',
-            'CHAT_WRITE_FORBIDDEN',
-            'SESSION_REVOKED',
-            'USER_ADMIN_INVALID',
-        ], true);
-    }
-
-    private function telegramError(Throwable $exception): string
-    {
-        if ($exception instanceof RPCErrorException) {
-            return $exception->rpc.' — '.$exception->description;
-        }
-
-        return $exception->getMessage();
-    }
-
-    private function telegramAccountLabel(TelegramAccount $telegramAccount): string
-    {
-        return filled($telegramAccount->username)
-            ? '@'.$telegramAccount->username
-            : "«{$telegramAccount->name}»";
-    }
-
-    /** @param array<string, mixed> $summary */
-    private function logSummary(
-        string $channel,
-        TelegramAccount $telegramAccount,
-        array $summary,
-    ): void {
-        Log::info('Telegram deleted channel participant cleanup finished.', [
-            'channel' => $channel,
-            'telegram_account_id' => $telegramAccount->id,
-            ...$summary,
-        ]);
     }
 }

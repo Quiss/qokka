@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Actions\QueueMediaAssetDownloadRetries;
-use App\Jobs\DownloadMediaAssetJob;
 use App\MediaType;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
@@ -110,9 +109,9 @@ class PlannedPostMediaManager
                 ]);
 
                 if ($asset->path === null) {
-                    DownloadMediaAssetJob::dispatch($asset->id)
-                        ->onQueue(DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE)
-                        ->afterCommit();
+                    DB::afterCommit(function () use ($asset): void {
+                        $this->queueMediaAssetDownloadRetries->handle(collect([$asset]));
+                    });
                 }
             });
         });

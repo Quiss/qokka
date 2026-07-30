@@ -31,8 +31,11 @@ use App\Models\SourceChannel;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
+use App\Models\TelegramAccount;
+use App\Models\TelegramOwnerCommand;
 use App\Models\User;
 use App\PlannedPostStatus;
+use App\TelegramOwnerCommandType;
 use Filament\Actions\Testing\TestAction;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\MarkdownEditor;
@@ -503,6 +506,27 @@ class EditorialPlanEnhancementsTest extends TestCase
             'content_plan_id' => $plan->id,
             'status' => CandidateStatus::Selected,
         ]);
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourceMessage = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'telegram_account_id' => $account->id,
+            'external_message_id' => 101,
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $origin = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $sourceMessage->id,
+            'type' => MediaType::Video,
+            'path' => null,
+            'downloaded_at' => null,
+            'mime_type' => 'video/mp4',
+        ]);
         $plannedPost = PlannedPost::factory()->create([
             'content_plan_id' => $plan->id,
             'story_candidate_id' => $candidate->id,
@@ -511,6 +535,8 @@ class EditorialPlanEnhancementsTest extends TestCase
             'risk_flags' => [],
         ]);
         $video = MediaAsset::factory()->for($plannedPost, 'mediable')->create([
+            'source_message_id' => $sourceMessage->id,
+            'origin_media_asset_id' => $origin->id,
             'type' => MediaType::Video,
             'path' => null,
             'downloaded_at' => null,
@@ -538,10 +564,15 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->callMountedAction()
             ->assertNotified('Повторная загрузка медиа поставлена в очередь');
 
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $video->id && ! $job->previewOnly,
+        $this->assertNotNull($video);
+        $this->assertDatabaseHas('telegram_owner_commands', [
+            'telegram_account_id' => $account->id,
+            'type' => TelegramOwnerCommandType::DownloadMedia->value,
+            'status' => 'pending',
+        ]);
+        $this->assertSame(
+            $origin->id,
+            TelegramOwnerCommand::query()->latest('id')->firstOrFail()->payload['media_asset_id'],
         );
     }
 
@@ -616,12 +647,25 @@ class EditorialPlanEnhancementsTest extends TestCase
     {
         Queue::fake();
         $user = User::factory()->create(['is_active' => true]);
-        $channel = SourceChannel::factory()->create();
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'collector_telegram_account_id' => $account->id,
+        ]);
         $sourcePost = SourcePost::factory()->create([
             'source_channel_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
+        $sourceMessage = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'telegram_account_id' => $account->id,
+            'external_message_id' => 102,
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
         $mediaAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $sourceMessage->id,
             'path' => null,
             'downloaded_at' => null,
             'failed_at' => now(),
@@ -640,11 +684,14 @@ class EditorialPlanEnhancementsTest extends TestCase
         $mediaAsset->refresh();
         $this->assertNull($mediaAsset->failed_at);
         $this->assertArrayNotHasKey('download_error', $mediaAsset->metadata ?? []);
-        Queue::assertPushedOn(
-            DownloadMediaAssetJob::HIGH_PRIORITY_QUEUE,
-            DownloadMediaAssetJob::class,
-            fn (DownloadMediaAssetJob $job): bool => $job->mediaAssetId === $mediaAsset->id
-                && ! $job->previewOnly,
+        $this->assertDatabaseHas('telegram_owner_commands', [
+            'telegram_account_id' => $account->id,
+            'type' => TelegramOwnerCommandType::DownloadMedia->value,
+            'status' => 'pending',
+        ]);
+        $this->assertSame(
+            $mediaAsset->id,
+            TelegramOwnerCommand::query()->latest('id')->firstOrFail()->payload['media_asset_id'],
         );
     }
 

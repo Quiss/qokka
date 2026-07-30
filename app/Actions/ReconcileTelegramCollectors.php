@@ -57,7 +57,6 @@ class ReconcileTelegramCollectors
                 $previousId = $sourceChannel->collector_telegram_account_id;
                 $selected = $this->assignTelegramCollector->handle(
                     $sourceChannel,
-                    ensureCurrentSubscription: false,
                     clearWhenUnavailable: false,
                 );
 

@@ -5,7 +5,6 @@ namespace App\Providers;
 use App\Contracts\ContentIntelligence;
 use App\Contracts\OperationsNotifier;
 use App\Contracts\Publisher;
-use App\Services\MadelineClientPool;
 use App\Services\MadelineOwnerLease;
 use App\Services\OpenRouterContentIntelligence;
 use App\Services\TelegramOperationsNotifier;
@@ -26,7 +25,6 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(ContentIntelligence::class, OpenRouterContentIntelligence::class);
         $this->app->bind(OperationsNotifier::class, TelegramOperationsNotifier::class);
         $this->app->bind(Publisher::class, TelegramPublisher::class);
-        $this->app->singleton(MadelineClientPool::class);
         $this->app->singleton(MadelineOwnerLease::class);
     }
 

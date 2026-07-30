@@ -4,10 +4,12 @@ namespace Tests\Feature;
 
 use App\Contracts\MadelineClient;
 use App\Models\TelegramAccount;
-use App\Services\MadelineClientFactory;
-use App\Services\MadelineClientPool;
+use App\Models\TelegramOwnerCommand;
+use App\Services\TelegramOwnerCommandDispatcher;
+use App\Services\TelegramOwnerCommandExecutor;
 use App\TelegramAccountStatus;
-use danog\MadelineProto\RPCErrorException;
+use App\TelegramOwnerCommandStatus;
+use App\TelegramOwnerCommandType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
 use Tests\TestCase;
@@ -39,30 +41,27 @@ class TelegramChannelCleanupTest extends TestCase
             ], 3));
         $client->shouldNotReceive('banChannelParticipant');
         $client->shouldNotReceive('unbanChannelParticipant');
-        $this->bindClient($client, $account);
+        $command = new TelegramOwnerCommand([
+            'telegram_account_id' => $account->id,
+            'type' => TelegramOwnerCommandType::ScanDeletedParticipants,
+            'payload' => ['channel' => '@pokatrend'],
+        ]);
 
-        $this->artisan('telegram:channel:clean-deleted', [
-            'channel' => 'https://t.me/pokatrend/123',
-            '--dry-run' => true,
-        ])
-            ->expectsOutputToContain('Найдено удалённых аккаунтов: 2')
-            ->expectsOutputToContain('Режим dry-run')
-            ->assertSuccessful();
+        $result = app(TelegramOwnerCommandExecutor::class)->execute($command, $client);
+
+        $this->assertSame([101, 103], array_column($result['participants'], 'id'));
     }
 
     public function test_command_stops_when_confirmation_is_rejected(): void
     {
         $account = TelegramAccount::factory()->create();
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnTrue();
-        $client->shouldReceive('getChannelParticipants')
-            ->once()
-            ->andReturn($this->participantPage([
-                ['id' => 101, 'deleted' => true],
-            ], 1));
-        $client->shouldNotReceive('banChannelParticipant');
-        $client->shouldNotReceive('unbanChannelParticipant');
-        $this->bindClient($client, $account);
+        $this->bindCommands([
+            $this->completedCommand(
+                $account,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                ['participants' => [['id' => 101, 'deleted' => true]]],
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', ['channel' => '@pokatrend'])
             ->expectsConfirmation(
@@ -83,117 +82,108 @@ class TelegramChannelCleanupTest extends TestCase
             'name' => 'second',
             'username' => 'admin_two',
         ]);
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnTrue();
-        $client->shouldReceive('getChannelParticipants')
-            ->once()
-            ->andReturn($this->participantPage([
-                ['id' => 101, 'deleted' => true],
-                ['id' => 102, 'deleted' => true],
-            ], 2));
-        $client->shouldReceive('banChannelParticipant')
-            ->once()
-            ->with('@pokatrend', 101)
-            ->ordered();
-        $client->shouldReceive('unbanChannelParticipant')
-            ->once()
-            ->with('@pokatrend', 101)
-            ->ordered();
-        $client->shouldReceive('banChannelParticipant')
-            ->once()
-            ->with('@pokatrend', 102)
-            ->ordered();
-        $client->shouldReceive('unbanChannelParticipant')
-            ->once()
-            ->with('@pokatrend', 102)
-            ->ordered();
-        $this->bindClient($client, $selectedAccount);
+        $this->bindCommands([
+            $this->completedCommand(
+                $selectedAccount,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                ['participants' => [
+                    ['id' => 101, 'deleted' => true],
+                    ['id' => 102, 'deleted' => true],
+                ]],
+            ),
+            $this->completedCommand(
+                $selectedAccount,
+                TelegramOwnerCommandType::RemoveDeletedParticipants,
+                ['removed' => 2, 'failed' => 0],
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', [
             'channel' => 'pokatrend',
             '--account' => '@ADMIN_TWO',
             '--force' => true,
         ])
-            ->expectsOutputToContain(
-                'Итог: найдено 2, удалено и разблокировано 2, осталось в бан-листе 0, ошибок 0.',
-            )
+            ->expectsOutputToContain('Итог: удалено и разблокировано 2, ошибок 0.')
             ->assertSuccessful();
     }
 
     public function test_command_reports_a_member_left_banned_when_unban_fails(): void
     {
         $account = TelegramAccount::factory()->create();
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnTrue();
-        $client->shouldReceive('getChannelParticipants')
-            ->once()
-            ->andReturn($this->participantPage([
-                ['id' => 101, 'deleted' => true],
-            ], 1));
-        $client->shouldReceive('banChannelParticipant')->once();
-        $client->shouldReceive('unbanChannelParticipant')
-            ->once()
-            ->andThrow(new TelegramCleanupRpcException('INPUT_USER_DEACTIVATED'));
-        $this->bindClient($client, $account);
+        $this->bindCommands([
+            $this->completedCommand(
+                $account,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                ['participants' => [['id' => 101, 'deleted' => true]]],
+            ),
+            $this->completedCommand(
+                $account,
+                TelegramOwnerCommandType::RemoveDeletedParticipants,
+                ['removed' => 0, 'failed' => 1],
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', [
             'channel' => '@pokatrend',
             '--force' => true,
         ])
-            ->expectsOutputToContain('осталось в бан-листе 1')
+            ->expectsOutputToContain('ошибок 1')
             ->assertFailed();
     }
 
     public function test_flood_wait_stops_the_cleanup_before_remaining_members(): void
     {
         $account = TelegramAccount::factory()->create();
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnTrue();
-        $client->shouldReceive('getChannelParticipants')
-            ->once()
-            ->andReturn($this->participantPage([
-                ['id' => 101, 'deleted' => true],
-                ['id' => 102, 'deleted' => true],
-            ], 2));
-        $client->shouldReceive('banChannelParticipant')
-            ->once()
-            ->with('@pokatrend', 101)
-            ->andThrow(new TelegramCleanupRpcException('FLOOD_WAIT_120'));
-        $client->shouldNotReceive('unbanChannelParticipant');
-        $this->bindClient($client, $account);
+        $this->bindCommands([
+            $this->completedCommand(
+                $account,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                ['participants' => [
+                    ['id' => 101, 'deleted' => true],
+                    ['id' => 102, 'deleted' => true],
+                ]],
+            ),
+            $this->failedCommand(
+                $account,
+                TelegramOwnerCommandType::RemoveDeletedParticipants,
+                'FLOOD_WAIT_120',
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', [
             'channel' => '@pokatrend',
             '--force' => true,
         ])
-            ->expectsOutputToContain('Очистка остановлена из-за критической ошибки Telegram')
+            ->expectsOutputToContain('FLOOD_WAIT_120')
             ->assertFailed();
     }
 
     public function test_command_fails_before_scanning_without_ban_permission(): void
     {
         $account = TelegramAccount::factory()->create();
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnFalse();
-        $client->shouldNotReceive('getChannelParticipants');
-        $this->bindClient($client, $account);
+        $this->bindCommands([
+            $this->failedCommand(
+                $account,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                'Telegram-аккаунт не может удалять участников @pokatrend.',
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', ['channel' => '@pokatrend'])
-            ->expectsOutputToContain('не имеет права блокировать участников')
+            ->expectsOutputToContain('не может удалять участников')
             ->assertFailed();
     }
 
     public function test_command_succeeds_without_confirmation_when_no_deleted_accounts_exist(): void
     {
         $account = TelegramAccount::factory()->create();
-        $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('canBanChannelParticipants')->once()->andReturnTrue();
-        $client->shouldReceive('getChannelParticipants')
-            ->once()
-            ->andReturn($this->participantPage([], 0));
-        $client->shouldNotReceive('banChannelParticipant');
-        $client->shouldNotReceive('unbanChannelParticipant');
-        $this->bindClient($client, $account);
+        $this->bindCommands([
+            $this->completedCommand(
+                $account,
+                TelegramOwnerCommandType::ScanDeletedParticipants,
+                ['participants' => []],
+            ),
+        ]);
 
         $this->artisan('telegram:channel:clean-deleted', ['channel' => '@pokatrend'])
             ->expectsOutputToContain('Найдено удалённых аккаунтов: 0')
@@ -247,28 +237,41 @@ class TelegramChannelCleanupTest extends TestCase
         ];
     }
 
-    private function bindClient(
-        MadelineClient $client,
-        TelegramAccount $expectedAccount,
-    ): void {
-        $factory = Mockery::mock(MadelineClientFactory::class);
-        $factory->shouldReceive('make')
-            ->once()
-            ->with(Mockery::on(
-                fn (TelegramAccount $account): bool => $account->is($expectedAccount),
-            ))
-            ->andReturn($client);
-        $this->app->instance(
-            MadelineClientPool::class,
-            new MadelineClientPool($factory),
-        );
-    }
-}
-
-class TelegramCleanupRpcException extends RPCErrorException
-{
-    public function __construct(string $rpc)
+    /** @param list<TelegramOwnerCommand> $commands */
+    private function bindCommands(array $commands): void
     {
-        parent::__construct($rpc, $rpc, 400, 'channels.editBanned');
+        $dispatcher = Mockery::mock(TelegramOwnerCommandDispatcher::class);
+        $dispatcher->shouldReceive('dispatch')
+            ->times(count($commands))
+            ->andReturn(...$commands);
+
+        $this->app->instance(TelegramOwnerCommandDispatcher::class, $dispatcher);
+    }
+
+    /** @param array<string, mixed> $result */
+    private function completedCommand(
+        TelegramAccount $account,
+        TelegramOwnerCommandType $type,
+        array $result,
+    ): TelegramOwnerCommand {
+        return TelegramOwnerCommand::factory()->for($account)->create([
+            'type' => $type,
+            'status' => TelegramOwnerCommandStatus::Completed,
+            'result' => $result,
+            'finished_at' => now(),
+        ]);
+    }
+
+    private function failedCommand(
+        TelegramAccount $account,
+        TelegramOwnerCommandType $type,
+        string $error,
+    ): TelegramOwnerCommand {
+        return TelegramOwnerCommand::factory()->for($account)->create([
+            'type' => $type,
+            'status' => TelegramOwnerCommandStatus::Failed,
+            'last_error' => $error,
+            'finished_at' => now(),
+        ]);
     }
 }
