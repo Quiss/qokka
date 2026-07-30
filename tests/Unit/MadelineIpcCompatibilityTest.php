@@ -2,26 +2,36 @@
 
 namespace Tests\Unit;
 
+use App\Console\Commands\TelegramListenCommand;
 use App\Contracts\MadelineClient;
-use App\Services\MadelineApiFactory;
-use App\Services\MadelineProtoClient;
-use App\Telegram\ChannelSourceEventHandler;
+use App\Contracts\TelegramMediaClient;
+use App\Services\TelegramApiServerClient;
+use App\Services\TelegramApiServerClientFactory;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
 class MadelineIpcCompatibilityTest extends TestCase
 {
-    public function test_application_factory_exposes_only_the_session_owner_entrypoint(): void
+    public function test_application_factory_creates_only_http_api_clients(): void
     {
-        $factory = new ReflectionClass(MadelineApiFactory::class);
+        $factory = new ReflectionClass(TelegramApiServerClientFactory::class);
 
-        $this->assertTrue($factory->hasMethod('makeOwner'));
+        $this->assertTrue($factory->hasMethod('forAccount'));
         $this->assertFalse($factory->hasMethod('makeIpcClient'));
     }
 
-    public function test_only_the_madeline_event_handler_implements_the_rpc_client_contract(): void
+    public function test_runtime_client_and_listener_have_no_ipc_dependency(): void
     {
-        $this->assertTrue(is_a(ChannelSourceEventHandler::class, MadelineClient::class, true));
-        $this->assertFalse(class_exists(MadelineProtoClient::class));
+        $this->assertTrue(is_a(TelegramApiServerClient::class, MadelineClient::class, true));
+        $this->assertTrue(is_a(TelegramApiServerClient::class, TelegramMediaClient::class, true));
+
+        $listenerSource = file_get_contents(
+            (new ReflectionClass(TelegramListenCommand::class))->getFileName(),
+        );
+
+        $this->assertIsString($listenerSource);
+        $this->assertStringNotContainsString('MadelineApiFactory', $listenerSource);
+        $this->assertStringNotContainsString('startAndLoopMulti', $listenerSource);
+        $this->assertStringNotContainsString('isIpc', $listenerSource);
     }
 }

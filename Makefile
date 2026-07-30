@@ -39,27 +39,30 @@ first:
 deploy:
 	@set -eu; \
 	DEPLOY_READY=0; \
-	trap 'if [ "$$DEPLOY_READY" -ne 1 ]; then echo "Deploy failed before MadelineProto readiness; queues remain paused."; fi' 0 1 2 15; \
+	trap 'if [ "$$DEPLOY_READY" -ne 1 ]; then echo "Deploy failed before TelegramApiServer readiness; queues remain paused."; fi' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:pause; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
-	$(PRODUCTION_COMPOSE) stop --timeout 370 horizon; \
-	$(PRODUCTION_COMPOSE) stop --timeout 120 madeline; \
+	$(PRODUCTION_COMPOSE) stop --timeout 370 telegram-owner; \
+	$(PRODUCTION_COMPOSE) stop --timeout 30 telegram-events; \
+	$(PRODUCTION_COMPOSE) up -d --remove-orphans pgsql redis; \
 	git pull; \
 	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
+	mkdir -p storage/app/telegram-api-server/sessions; \
+	$(PRODUCTION_COMPOSE) up -d --remove-orphans --wait --wait-timeout 180 app pgsql redis; \
 	$(PRODUCTION_COMPOSE) exec app php artisan optimize; \
 	$(PRODUCTION_COMPOSE) exec app php artisan migrate --force; \
-	$(PRODUCTION_COMPOSE) exec app php artisan telegram:media:request-missing --include-failed; \
-	$(PRODUCTION_COMPOSE) exec app php artisan horizon:clear --queue=media-download-high; \
-	$(PRODUCTION_COMPOSE) exec app php artisan horizon:clear --queue=media-download-low; \
-	$(PRODUCTION_COMPOSE) up -d --remove-orphans --wait --wait-timeout 180 app pgsql redis; \
 	$(MAKE) verify-postgres-capacity; \
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
-	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 madeline; \
-	$(PRODUCTION_COMPOSE) exec madeline php artisan telegram:health --no-interaction; \
+	$(PRODUCTION_COMPOSE) build --pull --no-cache telegram-api; \
+	$(PRODUCTION_COMPOSE) up -d --no-build --wait --wait-timeout 240 telegram-api; \
+	$(PRODUCTION_COMPOSE) exec app php artisan telegram:api:health --no-interaction; \
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 telegram-events telegram-owner; \
+	$(MAKE) restart-horizon; \
 	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 horizon; \
+	$(PRODUCTION_COMPOSE) exec app php artisan telegram:media:request-missing --include-failed; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
 	DEPLOY_READY=1; \
@@ -183,14 +186,27 @@ restart-scheduler:
 	$(PRODUCTION_COMPOSE) exec app php artisan schedule:clear-cache
 	@echo "Scheduler restarted with cleared locks"
 
-# Restart MadelineProto gracefully so sessions can be serialized
-restart-madeline:
-	$(PRODUCTION_COMPOSE) restart --timeout 120 madeline
-	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 madeline
-	@echo "MadelineProto listener restarted"
+# Restart the only MadelineProto session owner.
+restart-telegram-api:
+	$(PRODUCTION_COMPOSE) restart --timeout 120 telegram-api
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 240 telegram-api
+	@echo "TelegramApiServer restarted"
+
+restart-telegram-events:
+	$(PRODUCTION_COMPOSE) restart telegram-events
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 telegram-events
+	@echo "Telegram events listener restarted"
+
+restart-telegram-owner:
+	$(PRODUCTION_COMPOSE) restart --timeout 370 telegram-owner
+	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 telegram-owner
+	@echo "Telegram owner worker restarted"
+
+restart-telegram: restart-telegram-api restart-telegram-events restart-telegram-owner
+	@echo "All Telegram services restarted"
 
 # Restart all background workers
-restart-workers: restart-horizon restart-scheduler restart-madeline
+restart-workers: restart-horizon restart-scheduler restart-telegram
 	@echo "All workers restarted"
 
 # Restart the application and all background workers
@@ -227,6 +243,7 @@ import-db:
         backup backup-init backup-db backup-storage backup-cleanup backup-list \
         restore-db-latest restore-storage-latest \
         reconcile-containers verify-postgres-capacity \
-        restart-app restart-horizon restart-scheduler restart-madeline \
+        restart-app restart-horizon restart-scheduler \
+        restart-telegram-api restart-telegram-events restart-telegram-owner restart-telegram \
         restart-workers restart-all reload-all \
         import-db

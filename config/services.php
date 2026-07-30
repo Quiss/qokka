@@ -66,6 +66,13 @@ return [
         'bridge_url' => env('TELEGRAM_BRIDGE_URL', env('APP_URL').'/api/internal/telegram/updates'),
         'subscriptions_url' => env('TELEGRAM_SUBSCRIPTIONS_URL', env('APP_URL').'/api/internal/telegram/subscriptions'),
         'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 300 * 1024 * 1024),
+        'api_server' => [
+            'url' => env('TELEGRAM_API_SERVER_URL', 'http://telegram-api:9503'),
+            'websocket_url' => env('TELEGRAM_API_SERVER_WEBSOCKET_URL', 'ws://telegram-api:9503/events'),
+            'connect_timeout' => (int) env('TELEGRAM_API_SERVER_CONNECT_TIMEOUT', 5),
+            'timeout' => (int) env('TELEGRAM_API_SERVER_TIMEOUT', 30),
+            'download_timeout' => (int) env('TELEGRAM_API_SERVER_DOWNLOAD_TIMEOUT', 330),
+        ],
         'database_max_connections' => (int) env('TELEGRAM_DATABASE_MAX_CONNECTIONS', 20),
         'database_idle_timeout' => (int) env('TELEGRAM_DATABASE_IDLE_TIMEOUT', 300),
         'download_parallel_chunks' => (int) env('TELEGRAM_DOWNLOAD_PARALLEL_CHUNKS', 4),

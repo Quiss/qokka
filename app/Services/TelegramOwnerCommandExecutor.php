@@ -7,6 +7,7 @@ use App\Actions\FindDeletedTelegramChannelParticipants;
 use App\Actions\IngestTelegramUpdate;
 use App\Actions\RequestTelegramSourceHistorySync;
 use App\Contracts\MadelineClient;
+use App\Exceptions\TelegramApiServerException;
 use App\Models\SourceChannel;
 use App\Models\TelegramOwnerCommand;
 use App\TelegramOwnerCommandType;
@@ -113,8 +114,8 @@ class TelegramOwnerCommandExecutor
         if ($normalized['username'] !== null || filled($sourceChannel->username)) {
             try {
                 $client->joinChannel($peer);
-            } catch (RPCErrorException $exception) {
-                if ($exception->rpc !== 'USER_ALREADY_PARTICIPANT') {
+            } catch (Throwable $exception) {
+                if ($this->rpcCode($exception) !== 'USER_ALREADY_PARTICIPANT') {
                     throw $exception;
                 }
             }
@@ -264,8 +265,8 @@ class TelegramOwnerCommandExecutor
                 $client->banChannelParticipant($channel, $participantId);
                 $client->unbanChannelParticipant($channel, $participantId);
                 $removed++;
-            } catch (RPCErrorException $exception) {
-                if ($exception->rpc === 'USER_NOT_PARTICIPANT') {
+            } catch (Throwable $exception) {
+                if ($this->rpcCode($exception) === 'USER_NOT_PARTICIPANT') {
                     $removed++;
 
                     continue;
@@ -294,5 +295,14 @@ class TelegramOwnerCommandExecutor
                 trim(($user['first_name'] ?? '').' '.($user['last_name'] ?? '')) ?: null
             ),
         ];
+    }
+
+    private function rpcCode(Throwable $exception): ?string
+    {
+        return match (true) {
+            $exception instanceof RPCErrorException => $exception->rpc,
+            $exception instanceof TelegramApiServerException => $exception->rpc,
+            default => null,
+        };
     }
 }

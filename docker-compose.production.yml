@@ -116,8 +116,69 @@ services:
       retries: 3
       start_period: 30s
 
-  # MadelineProto listener (one process owns all active user sessions)
-  madeline:
+  # TelegramApiServer is the only process that opens MadelineProto sessions.
+  telegram-api:
+    image: ${TELEGRAM_API_SERVER_IMAGE:-channelbot-telegram-api}:latest
+    build:
+      context: .
+      dockerfile: docker/production/telegram-api/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    init: true
+    user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
+    working_dir: /app-host-link
+    command: ["-s=*"]
+    stop_signal: SIGTERM
+    stop_grace_period: 120s
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 9503
+      MEMORY_LIMIT: ${TELEGRAM_API_SERVER_MEMORY_LIMIT:-512M}
+      TIMEZONE: ${APP_TIMEZONE:-Europe/Moscow}
+      REQUESTS_BULK_INTERVAL: 0
+      IP_WHITELIST: 127.0.0.1
+      PASSWORDS: '{}'
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      LOGGER_LEVEL: ${TELEGRAM_API_SERVER_LOG_LEVEL:-2}
+      TELEGRAM_PROXY_ADDRESS: ""
+      TELEGRAM_PROXY_PORT: ""
+      TELEGRAM_PROXY_USERNAME: ""
+      TELEGRAM_PROXY_PASSWORD: ""
+      DB_TYPE: postgres
+      DB_HOST: pgsql
+      DB_PORT: 5432
+      DB_USER: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_MAX_CONNECTIONS: ${TELEGRAM_DATABASE_MAX_CONNECTIONS:-20}
+      DB_IDLE_TIMEOUT: ${TELEGRAM_DATABASE_IDLE_TIMEOUT:-300}
+      DB_CACHE_TTL: ${TELEGRAM_DATABASE_CACHE_TTL:-+5 minutes}
+      DB_SERIALIZER: serialize
+      DB_ENABLE_MIN_DATABASE: 0
+      DB_ENABLE_FILE_REFERENCE_DATABASE: 1
+      PROMETHEUS_ENABLE: 0
+      RESUME_ON_ERROR: 0
+      WAIT_HOSTS: pgsql:5432
+      WAIT_TIMEOUT: 60
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp
+    volumes:
+      - ./storage/app/telegram-api-server/sessions:/app-host-link/sessions
+    networks:
+      - default
+    depends_on:
+      pgsql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--max-time", "15", "http://localhost:9503/system/healthcheck"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 120s
+
+  # Receives raw MTProto updates over TelegramApiServer WebSocket.
+  telegram-events:
     image: ${APP_IMAGE:-channelbot-app}:latest
     restart: unless-stopped
     logging: *default-logging
@@ -125,17 +186,46 @@ services:
     working_dir: /var/www/html
     command: ["php", "artisan", "telegram:listen", "--no-interaction"]
     stop_signal: SIGTERM
-    stop_grace_period: 120s
+    stop_grace_period: 30s
     environment:
-      DB_APPLICATION_NAME: channelbot-madeline
+      DB_APPLICATION_NAME: channelbot-telegram-events
     volumes: *app-volumes
     networks:
       - default
     depends_on:
       app:
         condition: service_healthy
+      telegram-api:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f '[p]hp artisan telegram:listen' > /dev/null && php artisan telegram:health --no-interaction"]
+      test: ["CMD-SHELL", "pgrep -f '[p]hp artisan telegram:listen' > /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Executes media downloads and other account-owner commands outside Horizon.
+  telegram-owner:
+    image: ${APP_IMAGE:-channelbot-app}:latest
+    restart: unless-stopped
+    logging: *default-logging
+    init: true
+    working_dir: /var/www/html
+    command: ["php", "artisan", "telegram:owner:work", "--no-interaction"]
+    stop_signal: SIGTERM
+    stop_grace_period: 370s
+    environment:
+      DB_APPLICATION_NAME: channelbot-telegram-owner
+    volumes: *app-volumes
+    networks:
+      - default
+    depends_on:
+      app:
+        condition: service_healthy
+      telegram-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f '[p]hp artisan telegram:owner:work' > /dev/null && php artisan telegram:api:health --no-interaction"]
       interval: 15s
       timeout: 10s
       retries: 3

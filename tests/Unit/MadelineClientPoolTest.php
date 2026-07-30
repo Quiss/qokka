@@ -2,15 +2,14 @@
 
 namespace Tests\Unit;
 
-use Amp\Http\Client\HttpClient;
+use App\Contracts\MadelineClient;
 use App\Models\TelegramAccount;
 use App\Models\TelegramOwnerCommand;
+use App\Services\TelegramApiServerClient;
 use App\Services\TelegramOwnerCommandDispatcher;
-use App\Telegram\ChannelSourceEventHandler;
 use App\TelegramOwnerCommandStatus;
 use App\TelegramOwnerCommandType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use ReflectionMethod;
 use Tests\TestCase;
 
 class MadelineClientPoolTest extends TestCase
@@ -65,14 +64,11 @@ class MadelineClientPoolTest extends TestCase
         $this->assertDatabaseCount('telegram_owner_commands', 1);
     }
 
-    public function test_telegram_bridge_reuses_a_dedicated_system_dns_http_client(): void
+    public function test_runtime_rpc_client_is_the_telegram_api_server_adapter(): void
     {
-        $bridgeHttpClient = new ReflectionMethod(ChannelSourceEventHandler::class, 'bridgeHttpClient');
-
-        $first = $bridgeHttpClient->invoke(null);
-        $second = $bridgeHttpClient->invoke(null);
-
-        $this->assertInstanceOf(HttpClient::class, $first);
-        $this->assertSame($first, $second);
+        $this->assertTrue(is_subclass_of(
+            TelegramApiServerClient::class,
+            MadelineClient::class,
+        ));
     }
 }

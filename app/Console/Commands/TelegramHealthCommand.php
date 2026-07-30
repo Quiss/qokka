@@ -4,17 +4,20 @@ namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
 use App\Services\MadelineOwnerLease;
+use App\Services\TelegramApiServer;
 use App\TelegramAccountStatus;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
 #[Signature('telegram:health')]
-#[Description('Check the foreground MadelineProto owner and account heartbeats')]
+#[Description('Check TelegramApiServer sessions and owner worker heartbeats')]
 class TelegramHealthCommand extends Command
 {
-    public function handle(MadelineOwnerLease $ownerLease): int
-    {
+    public function handle(
+        MadelineOwnerLease $ownerLease,
+        TelegramApiServer $server,
+    ): int {
         $accounts = TelegramAccount::query()
             ->where('is_active', true)
             ->whereIn('status', [
@@ -30,14 +33,23 @@ class TelegramHealthCommand extends Command
             return self::FAILURE;
         }
 
+        try {
+            $sessions = $server->sessions();
+        } catch (\Throwable $exception) {
+            $this->error('TelegramApiServer недоступен: '.$exception->getMessage());
+
+            return self::FAILURE;
+        }
+
         $unhealthyAccounts = $accounts->filter(
-            fn (TelegramAccount $account): bool => ! $account->isCollectorReady()
+            fn (TelegramAccount $account): bool => ($sessions[$account->uuid]['status'] ?? null) !== 'LOGGED_IN'
+                || ! $account->isCollectorReady()
                 || ! $ownerLease->isFresh($account->uuid),
         );
 
         if ($unhealthyAccounts->isNotEmpty()) {
             $this->error(
-                'MadelineProto owner не готов для аккаунтов: '
+                'Telegram owner не готов для аккаунтов: '
                 .$unhealthyAccounts->pluck('name')->join(', ')
                 .'.',
             );
@@ -45,7 +57,7 @@ class TelegramHealthCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("MadelineProto owner готов. Аккаунтов: {$accounts->count()}.");
+        $this->info("TelegramApiServer и owner worker готовы. Аккаунтов: {$accounts->count()}.");
 
         return self::SUCCESS;
     }

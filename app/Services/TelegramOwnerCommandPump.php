@@ -9,6 +9,7 @@ use App\Exceptions\PermanentTelegramMediaException;
 use App\Models\TelegramAccount;
 use App\Models\TelegramOwnerCommand;
 use App\OperationsNotificationTopic;
+use App\TelegramAccountStatus;
 use App\TelegramOwnerCommandStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -24,6 +25,7 @@ class TelegramOwnerCommandPump
         private readonly TelegramOwnerCommandExecutor $executor,
         private readonly QueueOperationsNotification $queueOperationsNotification,
         private readonly RequestMissingTelegramMedia $requestMissingMedia,
+        private readonly MadelineOwnerLease $ownerLease,
     ) {}
 
     public function run(string $telegramAccountUuid, MadelineClient $client): never
@@ -41,8 +43,17 @@ class TelegramOwnerCommandPump
                 'started_at' => null,
             ]);
         $nextBacklogScanAt = 0;
+        $nextHeartbeatAt = 0;
 
         while (true) {
+            if (time() >= $nextHeartbeatAt) {
+                $this->heartbeat($telegramAccount);
+                $nextHeartbeatAt = time() + max(
+                    5,
+                    (int) config('services.telegram.owner_heartbeat_seconds', 15),
+                );
+            }
+
             if (time() >= $nextBacklogScanAt) {
                 $this->requestMissingMediaWithoutStoppingPump($telegramAccount);
                 $nextBacklogScanAt = time() + 60;
@@ -68,6 +79,16 @@ class TelegramOwnerCommandPump
 
             $this->execute($command, $client);
         }
+    }
+
+    private function heartbeat(TelegramAccount $telegramAccount): void
+    {
+        $this->ownerLease->heartbeat($telegramAccount->uuid);
+        $telegramAccount->update([
+            'status' => TelegramAccountStatus::Connected,
+            'last_seen_at' => now(),
+            'last_error' => null,
+        ]);
     }
 
     private function requestMissingMediaWithoutStoppingPump(

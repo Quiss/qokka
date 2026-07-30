@@ -6,9 +6,11 @@ use App\Actions\AssignTelegramCollector;
 use App\Actions\ReconcileTelegramCollectors;
 use App\Models\SourceChannel;
 use App\Models\TelegramAccount;
+use App\Services\TelegramApiServer;
 use App\TelegramAccountStatus;
 use App\TelegramSourceAccessStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -16,13 +18,18 @@ class TelegramAccountManagementTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_listener_requires_bridge_secret(): void
+    public function test_telegram_api_server_does_not_require_the_legacy_bridge_secret(): void
     {
         config(['services.telegram.bridge_secret' => null]);
+        Http::fake([
+            '*/system/getSessionList' => Http::response([
+                'success' => true,
+                'response' => ['sessions' => []],
+                'errors' => [],
+            ]),
+        ]);
 
-        $this->artisan('telegram:listen')
-            ->expectsOutput('TELEGRAM_BRIDGE_SECRET не настроен. Укажите общий секрет для listener и HTTP bridge.')
-            ->assertFailed();
+        $this->assertSame([], app(TelegramApiServer::class)->sessions());
     }
 
     public function test_source_reference_is_normalized(): void

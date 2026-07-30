@@ -8,6 +8,7 @@ use App\Services\MadelineOwnerLease;
 use App\TelegramOwnerCommandStatus;
 use App\TelegramOwnerCommandType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class TelegramOwnerHealthTest extends TestCase
@@ -18,13 +19,28 @@ class TelegramOwnerHealthTest extends TestCase
     {
         $account = TelegramAccount::factory()->create();
         $ownerLease = app(MadelineOwnerLease::class);
+        Http::fake([
+            '*/system/getSessionList' => Http::response([
+                'success' => true,
+                'response' => [
+                    'sessions' => [
+                        $account->uuid => [
+                            'session' => $account->uuid,
+                            'file' => 'sessions/'.$account->uuid.'.madeline',
+                            'status' => 'LOGGED_IN',
+                        ],
+                    ],
+                ],
+                'errors' => [],
+            ]),
+        ]);
 
         $this->artisan('telegram:health')->assertFailed();
 
         $ownerLease->heartbeat($account->uuid);
 
         $this->artisan('telegram:health')
-            ->expectsOutputToContain('MadelineProto owner готов')
+            ->expectsOutputToContain('TelegramApiServer и owner worker готовы')
             ->assertSuccessful();
 
         $ownerLease->release($account->uuid);

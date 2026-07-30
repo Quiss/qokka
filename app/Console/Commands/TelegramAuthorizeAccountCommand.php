@@ -3,8 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Models\TelegramAccount;
-use App\Services\MadelineApiFactory;
 use App\Services\MadelineOwnerLease;
+use App\Services\TelegramApiServer;
 use App\TelegramAccountStatus;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -13,11 +13,11 @@ use RuntimeException;
 use Throwable;
 
 #[Signature('telegram:account:authorize {name : Понятное имя аккаунта}')]
-#[Description('Подключить или повторно авторизовать Telegram-аккаунт MadelineProto')]
+#[Description('Подключить или повторно авторизовать Telegram-аккаунт через TelegramApiServer')]
 class TelegramAuthorizeAccountCommand extends Command
 {
     public function handle(
-        MadelineApiFactory $apiFactory,
+        TelegramApiServer $server,
         MadelineOwnerLease $ownerLease,
     ): int {
         $name = trim((string) $this->argument('name'));
@@ -28,25 +28,49 @@ class TelegramAuthorizeAccountCommand extends Command
 
         if ($ownerLease->isFresh($account->uuid)) {
             $this->error(
-                'Аккаунт сейчас принадлежит telegram:listen. '
-                .'Остановите контейнер madeline перед повторной авторизацией.',
+                'Аккаунт сейчас обрабатывается telegram-owner. '
+                .'Остановите контейнер telegram-owner перед повторной авторизацией.',
             );
 
             return self::FAILURE;
         }
 
-        $this->info('Откройте Telegram на телефоне и отсканируйте QR-код.');
-        $this->line('Если QR недоступен, MadelineProto предложит вход по телефону и коду.');
-
         try {
-            $api = $apiFactory->makeOwner($account);
-            $api->start();
-            $self = $api->getSelf();
+            $status = $server->sessionStatus($account->uuid);
 
-            if (! is_array($self)) {
-                throw new RuntimeException('MadelineProto не вернул данные авторизованного аккаунта.');
+            if ($status === null) {
+                $server->addSession($account->uuid);
+                $status = $server->sessionStatus($account->uuid);
             }
 
+            if ($status !== 'LOGGED_IN') {
+                $phone = trim((string) $this->ask('Номер телефона в международном формате (+...)'));
+
+                if ($phone === '') {
+                    throw new RuntimeException('Номер телефона не указан.');
+                }
+
+                $server->call($account->uuid, 'phoneLogin', ['number' => $phone]);
+                $code = trim((string) $this->secret('Код подтверждения из Telegram'));
+
+                if ($code === '') {
+                    throw new RuntimeException('Код подтверждения не указан.');
+                }
+
+                $server->call($account->uuid, 'completePhoneLogin', ['code' => $code]);
+
+                if ($server->sessionStatus($account->uuid) === 'WAITING_PASSWORD') {
+                    $password = (string) $this->secret('Пароль двухфакторной аутентификации');
+                    $server->call($account->uuid, 'complete2faLogin', ['password' => $password]);
+                }
+            }
+
+            if (! $server->isLoggedIn($account->uuid)) {
+                throw new RuntimeException('TelegramApiServer не завершил авторизацию сессии.');
+            }
+
+            $server->call($account->uuid, 'serialize');
+            $self = $server->call($account->uuid, 'getSelf');
             $phone = isset($self['phone']) ? (string) $self['phone'] : null;
             $account->update([
                 'telegram_user_id' => (int) $self['id'],
@@ -67,7 +91,10 @@ class TelegramAuthorizeAccountCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Аккаунт «{$account->name}» подключён. Перезапустите telegram:listen.");
+        $this->info(
+            "Аккаунт «{$account->name}» подключён. "
+            .'Перезапустите telegram-events и telegram-owner.',
+        );
 
         return self::SUCCESS;
     }

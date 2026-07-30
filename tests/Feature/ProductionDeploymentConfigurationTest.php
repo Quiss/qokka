@@ -31,12 +31,12 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertStringNotContainsString('MEDIA_DOWNLOAD_', $deploy);
     }
 
-    public function test_horizon_has_no_media_download_supervisor_or_madeline_dependency(): void
+    public function test_horizon_has_no_media_download_supervisor_or_telegram_api_dependency(): void
     {
         $telegramSupervisor = config('horizon.environments.production.supervisor-telegram');
         $job = new DownloadMediaAssetJob(1);
         $compose = File::get(base_path('docker-compose.production.yml'));
-        $horizon = Str::between($compose, "  horizon:\n", "\n  # MadelineProto");
+        $horizon = Str::between($compose, "  horizon:\n", "\n  # TelegramApiServer");
 
         $this->assertSame(['telegram'], $telegramSupervisor['queue']);
         $this->assertSame(3, $telegramSupervisor['maxProcesses']);
@@ -47,7 +47,7 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(1, $job->tries);
         $this->assertFalse(method_exists($job, 'retryUntil'));
         $this->assertFalse(method_exists($job, 'middleware'));
-        $this->assertStringNotContainsString('madeline:', $horizon);
+        $this->assertStringNotContainsString('telegram-api:', $horizon);
     }
 
     public function test_legacy_media_job_has_no_retry_or_ipc_surface(): void
@@ -60,7 +60,7 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertFalse(method_exists($job, 'retryUntil'));
     }
 
-    public function test_deploy_stops_workers_before_updating_code_and_resumes_after_readiness(): void
+    public function test_deploy_gracefully_restarts_horizon_after_code_update_and_waits_for_telegram_api(): void
     {
         $makefile = File::get(base_path('Makefile'));
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
@@ -71,62 +71,74 @@ class ProductionDeploymentConfigurationTest extends TestCase
         );
 
         $pauseHorizonPosition = strpos($deploy, 'exec horizon php artisan horizon:pause');
-        $stopHorizonPosition = strpos($deploy, 'stop --timeout 370 horizon');
-        $stopMadelinePosition = strpos($deploy, 'stop --timeout 120 madeline');
+        $stopOwnerPosition = strpos($deploy, 'stop --timeout 370 telegram-owner');
+        $stopEventsPosition = strpos($deploy, 'stop --timeout 30 telegram-events');
         $composerInstallPosition = strpos($deploy, 'composer install');
         $migratePosition = strpos($deploy, 'artisan migrate --force');
+        $buildApiPosition = strpos($deploy, 'build --pull --no-cache telegram-api');
+        $startApiPosition = strpos($deploy, 'up -d --no-build --wait --wait-timeout 240 telegram-api');
+        $apiHealthPosition = strpos($deploy, 'telegram:api:health');
+        $startConsumersPosition = strpos($deploy, 'telegram-events telegram-owner');
+        $restartHorizonPosition = strpos($deploy, '$(MAKE) restart-horizon');
         $requestMissingPosition = strpos($deploy, 'telegram:media:request-missing');
-        $clearHighPosition = strpos($deploy, 'horizon:clear --queue=media-download-high');
-        $startMadelinePosition = strpos($deploy, 'up -d --wait --wait-timeout 180 madeline');
-        $healthPosition = strpos($deploy, 'exec madeline php artisan telegram:health');
-        $startHorizonPosition = strpos($deploy, 'up -d --wait --wait-timeout 180 horizon');
         $continueTelegramPosition = strrpos($deploy, 'queue:continue $(TELEGRAM_QUEUE)');
 
         $this->assertIsInt($pauseHorizonPosition);
-        $this->assertIsInt($stopHorizonPosition);
-        $this->assertIsInt($stopMadelinePosition);
+        $this->assertIsInt($stopOwnerPosition);
+        $this->assertIsInt($stopEventsPosition);
         $this->assertIsInt($composerInstallPosition);
         $this->assertIsInt($migratePosition);
+        $this->assertIsInt($buildApiPosition);
+        $this->assertIsInt($startApiPosition);
+        $this->assertIsInt($apiHealthPosition);
+        $this->assertIsInt($startConsumersPosition);
+        $this->assertIsInt($restartHorizonPosition);
         $this->assertIsInt($requestMissingPosition);
-        $this->assertIsInt($clearHighPosition);
-        $this->assertIsInt($startMadelinePosition);
-        $this->assertIsInt($healthPosition);
-        $this->assertIsInt($startHorizonPosition);
         $this->assertIsInt($continueTelegramPosition);
-        $this->assertTrue($pauseHorizonPosition < $stopHorizonPosition);
-        $this->assertTrue($stopHorizonPosition < $stopMadelinePosition);
-        $this->assertTrue($stopMadelinePosition < $composerInstallPosition);
+        $this->assertTrue($pauseHorizonPosition < $stopOwnerPosition);
+        $this->assertTrue($stopOwnerPosition < $stopEventsPosition);
+        $this->assertTrue($stopEventsPosition < $composerInstallPosition);
         $this->assertTrue($composerInstallPosition < $migratePosition);
-        $this->assertTrue($migratePosition < $requestMissingPosition);
-        $this->assertTrue($requestMissingPosition < $clearHighPosition);
-        $this->assertTrue($clearHighPosition < $startMadelinePosition);
-        $this->assertTrue($startMadelinePosition < $healthPosition);
-        $this->assertTrue($healthPosition < $startHorizonPosition);
-        $this->assertTrue($healthPosition < $continueTelegramPosition);
+        $this->assertTrue($migratePosition < $buildApiPosition);
+        $this->assertTrue($buildApiPosition < $startApiPosition);
+        $this->assertTrue($startApiPosition < $apiHealthPosition);
+        $this->assertTrue($apiHealthPosition < $startConsumersPosition);
+        $this->assertTrue($startConsumersPosition < $restartHorizonPosition);
+        $this->assertTrue($restartHorizonPosition < $requestMissingPosition);
+        $this->assertTrue($requestMissingPosition < $continueTelegramPosition);
         $this->assertStringContainsString('horizon:terminate', $restartHorizon);
         $this->assertStringContainsString('queues remain paused', $deploy);
         $this->assertStringNotContainsString('composer reinstall amphp/postgres', $deploy);
-        $this->assertStringNotContainsString('$(MAKE) restart-madeline', $deploy);
-        $this->assertStringNotContainsString('$(MAKE) restart-horizon', $deploy);
+        $this->assertStringNotContainsString('stop --timeout 370 horizon', $deploy);
+        $this->assertStringNotContainsString('horizon:clear --queue=media-download-', $deploy);
         $this->assertStringNotContainsString('$(MAKE) restart-all', $deploy);
         $this->assertSame(0, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
     }
 
-    public function test_cli_workers_override_the_frankenphp_http_healthcheck(): void
+    public function test_telegram_api_is_the_only_madeline_session_owner(): void
     {
         $compose = File::get(base_path('docker-compose.production.yml'));
         $scheduler = Str::between($compose, "  scheduler:\n", "\n  # Horizon");
-        $madeline = Str::between($compose, "  madeline:\n", "\n  # PostgreSQL");
+        $telegramApi = Str::between($compose, "  telegram-api:\n", "\n  # Receives raw");
+        $telegramEvents = Str::between($compose, "  telegram-events:\n", "\n  # Executes media");
+        $telegramOwner = Str::between($compose, "  telegram-owner:\n", "\n  # PostgreSQL");
 
         $this->assertStringContainsString(
             'test: ["CMD", "healthcheck-schedule"]',
             $scheduler,
         );
         $this->assertStringContainsString(
-            "pgrep -f '[p]hp artisan telegram:listen' > /dev/null && php artisan telegram:health --no-interaction",
-            $madeline,
+            'FROM xtrime/telegram-api-server:2.7.2',
+            File::get(base_path('docker/production/telegram-api/Dockerfile')),
         );
-        $this->assertStringContainsString('start_period: 90s', $madeline);
+        $this->assertStringContainsString(
+            './storage/app/telegram-api-server/sessions:/app-host-link/sessions',
+            $telegramApi,
+        );
+        $this->assertStringNotContainsString('TELEGRAM_API_SERVER_REF', $compose);
+        $this->assertStringContainsString('telegram:listen', $telegramEvents);
+        $this->assertStringContainsString('telegram:owner:work', $telegramOwner);
+        $this->assertStringNotContainsString("\n  madeline:", $compose);
     }
 
     public function test_production_does_not_run_the_unused_typesense_service(): void

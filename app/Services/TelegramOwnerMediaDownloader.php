@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\MadelineClient;
+use App\Contracts\TelegramMediaClient;
 use App\Exceptions\PermanentTelegramMediaException;
 use App\MediaType;
 use App\Models\MediaAsset;
@@ -95,10 +96,19 @@ class TelegramOwnerMediaDownloader
         File::ensureDirectoryExists(dirname($temporaryPath));
 
         try {
-            $client->downloadToFile(
-                $this->downloadReference($origin, $freshMessage, $previewOnly),
-                $temporaryPath,
-            );
+            if ($client instanceof TelegramMediaClient) {
+                $client->downloadMessageToFile(
+                    $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
+                    $sourceMessage->external_message_id,
+                    $temporaryPath,
+                    $previewOnly,
+                );
+            } else {
+                $client->downloadToFile(
+                    $this->downloadReference($origin, $freshMessage, $previewOnly),
+                    $temporaryPath,
+                );
+            }
             $downloadedSize = $this->assertDownloadedFile($temporaryPath, $previewOnly);
 
             if (! File::move($temporaryPath, $absolutePath)) {
