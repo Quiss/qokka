@@ -16,3 +16,10 @@ RUN composer install \
     --prefer-dist \
     --no-interaction \
     --optimize-autoloader
+
+COPY docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch /tmp/madelineproto-empty-report-peers.patch
+
+RUN patch --strip=1 \
+        --forward \
+        --input=/tmp/madelineproto-empty-report-peers.patch \
+    && rm /tmp/madelineproto-empty-report-peers.patch

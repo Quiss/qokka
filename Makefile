@@ -57,6 +57,7 @@ deploy:
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
 	$(PRODUCTION_COMPOSE) build --pull --no-cache telegram-api; \
+	$(MAKE) prepare-telegram-api-storage; \
 	$(PRODUCTION_COMPOSE) up -d --no-build --wait --wait-timeout 240 telegram-api; \
 	$(PRODUCTION_COMPOSE) exec app php artisan telegram:api:health --no-interaction; \
 	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 telegram-events telegram-owner; \
@@ -187,7 +188,11 @@ restart-scheduler:
 	@echo "Scheduler restarted with cleared locks"
 
 # Restart the only MadelineProto session owner.
-restart-telegram-api:
+prepare-telegram-api-storage:
+	mkdir -p storage/app/telegram-api-server/sessions
+	$(PRODUCTION_COMPOSE) run --rm --no-deps --user 0:0 --entrypoint /bin/sh telegram-api -lc 'chown -R "$(UID):$(GID)" /app-host-link/sessions && chmod -R u+rwX,g+rwX /app-host-link/sessions'
+
+restart-telegram-api: prepare-telegram-api-storage
 	$(PRODUCTION_COMPOSE) restart --timeout 120 telegram-api
 	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 240 telegram-api
 	@echo "TelegramApiServer restarted"
@@ -244,6 +249,6 @@ import-db:
         restore-db-latest restore-storage-latest \
         reconcile-containers verify-postgres-capacity \
         restart-app restart-horizon restart-scheduler \
-        restart-telegram-api restart-telegram-events restart-telegram-owner restart-telegram \
+        prepare-telegram-api-storage restart-telegram-api restart-telegram-events restart-telegram-owner restart-telegram \
         restart-workers restart-all reload-all \
         import-db

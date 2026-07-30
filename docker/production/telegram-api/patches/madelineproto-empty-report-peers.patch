@@ -1,0 +1,13 @@
+--- a/vendor/danog/madelineproto/src/MTProto.php
++++ b/vendor/danog/madelineproto/src/MTProto.php
+@@ -1797,6 +1797,10 @@
+      */
+     public function sanitizeReportPeers(int|string|array $userOrId): array
+     {
++        if ($userOrId === []) {
++            return [];
++        }
++
+         if (!(\is_array($userOrId) && !isset($userOrId['_']) && !isset($userOrId['id']))) {
+             $userOrId = [$userOrId];
+         }

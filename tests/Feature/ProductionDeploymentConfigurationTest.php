@@ -76,6 +76,7 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $composerInstallPosition = strpos($deploy, 'composer install');
         $migratePosition = strpos($deploy, 'artisan migrate --force');
         $buildApiPosition = strpos($deploy, 'build --pull --no-cache telegram-api');
+        $prepareApiStoragePosition = strpos($deploy, '$(MAKE) prepare-telegram-api-storage');
         $startApiPosition = strpos($deploy, 'up -d --no-build --wait --wait-timeout 240 telegram-api');
         $apiHealthPosition = strpos($deploy, 'telegram:api:health');
         $startConsumersPosition = strpos($deploy, 'telegram-events telegram-owner');
@@ -89,6 +90,7 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertIsInt($composerInstallPosition);
         $this->assertIsInt($migratePosition);
         $this->assertIsInt($buildApiPosition);
+        $this->assertIsInt($prepareApiStoragePosition);
         $this->assertIsInt($startApiPosition);
         $this->assertIsInt($apiHealthPosition);
         $this->assertIsInt($startConsumersPosition);
@@ -100,7 +102,8 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertTrue($stopEventsPosition < $composerInstallPosition);
         $this->assertTrue($composerInstallPosition < $migratePosition);
         $this->assertTrue($migratePosition < $buildApiPosition);
-        $this->assertTrue($buildApiPosition < $startApiPosition);
+        $this->assertTrue($buildApiPosition < $prepareApiStoragePosition);
+        $this->assertTrue($prepareApiStoragePosition < $startApiPosition);
         $this->assertTrue($startApiPosition < $apiHealthPosition);
         $this->assertTrue($apiHealthPosition < $startConsumersPosition);
         $this->assertTrue($startConsumersPosition < $restartHorizonPosition);
@@ -115,22 +118,78 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertSame(0, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
     }
 
+    public function test_telegram_api_storage_is_owned_by_its_runtime_user_before_starting(): void
+    {
+        $makefile = File::get(base_path('Makefile'));
+        $prepareStorage = Str::between(
+            $makefile,
+            "prepare-telegram-api-storage:\n",
+            "\nrestart-telegram-api:",
+        );
+        $restartTelegramApi = Str::between(
+            $makefile,
+            "restart-telegram-api: prepare-telegram-api-storage\n",
+            "\nrestart-telegram-events:",
+        );
+
+        $this->assertStringContainsString(
+            'run --rm --no-deps --user 0:0 --entrypoint /bin/sh telegram-api',
+            $prepareStorage,
+        );
+        $this->assertStringContainsString(
+            'chown -R "$(UID):$(GID)" /app-host-link/sessions',
+            $prepareStorage,
+        );
+        $this->assertStringContainsString(
+            'chmod -R u+rwX,g+rwX /app-host-link/sessions',
+            $prepareStorage,
+        );
+        $this->assertStringContainsString(
+            'restart --timeout 120 telegram-api',
+            $restartTelegramApi,
+        );
+    }
+
     public function test_telegram_api_is_the_only_madeline_session_owner(): void
     {
         $compose = File::get(base_path('docker-compose.production.yml'));
+        $dockerfile = File::get(base_path('docker/production/telegram-api/Dockerfile'));
+        $emptyReportPeersPatch = File::get(
+            base_path('docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch'),
+        );
         $scheduler = Str::between($compose, "  scheduler:\n", "\n  # Horizon");
         $telegramApi = Str::between($compose, "  telegram-api:\n", "\n  # Receives raw");
         $telegramEvents = Str::between($compose, "  telegram-events:\n", "\n  # Executes media");
         $telegramOwner = Str::between($compose, "  telegram-owner:\n", "\n  # PostgreSQL");
+        $composerInstallPosition = strpos($dockerfile, 'RUN composer install');
+        $copyPatchPosition = strpos(
+            $dockerfile,
+            'COPY docker/production/telegram-api/patches/madelineproto-empty-report-peers.patch',
+        );
+        $applyPatchPosition = strpos($dockerfile, 'RUN patch --strip=1');
 
         $this->assertStringContainsString(
             'test: ["CMD", "healthcheck-schedule"]',
             $scheduler,
         );
+        $this->assertIsInt($composerInstallPosition);
+        $this->assertIsInt($copyPatchPosition);
+        $this->assertIsInt($applyPatchPosition);
+        $this->assertTrue($composerInstallPosition < $copyPatchPosition);
+        $this->assertTrue($copyPatchPosition < $applyPatchPosition);
         $this->assertStringContainsString(
             'FROM xtrime/telegram-api-server:2.7.2',
-            File::get(base_path('docker/production/telegram-api/Dockerfile')),
+            $dockerfile,
         );
+        $this->assertStringContainsString(
+            'patches/madelineproto-empty-report-peers.patch',
+            $dockerfile,
+        );
+        $this->assertStringContainsString(
+            'if ($userOrId === [])',
+            $emptyReportPeersPatch,
+        );
+        $this->assertStringContainsString('return [];', $emptyReportPeersPatch);
         $this->assertStringContainsString(
             './storage/app/telegram-api-server/sessions:/app-host-link/sessions',
             $telegramApi,

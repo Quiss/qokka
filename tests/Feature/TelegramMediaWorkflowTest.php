@@ -6,6 +6,7 @@ use App\Actions\ApprovePlannedPost;
 use App\Actions\IngestTelegramUpdate;
 use App\Actions\RequestTelegramMediaDownload;
 use App\Contracts\MadelineClient;
+use App\Contracts\TelegramMediaClient;
 use App\Exceptions\PermanentTelegramMediaException;
 use App\Jobs\DownloadMediaAssetJob;
 use App\MediaType;
@@ -655,6 +656,63 @@ class TelegramMediaWorkflowTest extends TestCase
         Storage::disk('local')->assertExists($firstAsset->fresh()->path);
         Storage::disk('local')->assertExists($secondAsset->fresh()->path);
         $this->assertSame([100, 101], $downloadedMessageIds);
+    }
+
+    public function test_owner_download_resolves_a_fresh_peer_database_through_the_source_username(): void
+    {
+        Storage::fake('local');
+        $account = TelegramAccount::factory()->create();
+        $channel = SourceChannel::factory()->create([
+            'telegram_peer_id' => -1_002_586_170_533,
+            'username' => 'public_source',
+            'collector_telegram_account_id' => $account->id,
+        ]);
+        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $message = $sourcePost->messages()->create([
+            'source_channel_id' => $channel->id,
+            'external_message_id' => 5721,
+            'text' => 'Фото',
+            'entities' => [],
+            'metrics' => [],
+            'raw_payload' => [],
+            'posted_at' => now(),
+        ]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'source_message_id' => $message->id,
+            'type' => MediaType::Photo,
+            'path' => null,
+            'checksum' => null,
+            'downloaded_at' => null,
+            'size_bytes' => strlen('downloaded'),
+            'mime_type' => 'image/jpeg',
+        ]);
+        $client = Mockery::mock(MadelineClient::class.', '.TelegramMediaClient::class);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->with('@public_source', 5721)
+            ->andReturn([
+                '_' => 'message',
+                'id' => 5721,
+                'media' => ['_' => 'messageMediaPhoto'],
+            ]);
+        $client->shouldReceive('downloadMessageToFile')
+            ->once()
+            ->with('@public_source', 5721, Mockery::type('string'), false)
+            ->andReturnUsing(function (
+                int|string $peer,
+                int $messageId,
+                string $path,
+            ): string {
+                File::put($path, 'downloaded');
+
+                return $path;
+            });
+        $client->shouldNotReceive('downloadToFile');
+
+        $this->runOwnerDownload($asset, $client);
+
+        $this->assertNotNull($asset->fresh()->path);
+        Storage::disk('local')->assertExists($asset->fresh()->path);
     }
 
     public function test_owner_download_marks_permanently_unavailable_media_without_deleting_editor_data(): void

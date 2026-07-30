@@ -76,8 +76,9 @@ class TelegramOwnerMediaDownloader
             );
         }
 
+        $peer = $sourceChannel->telegramReference();
         $freshMessage = $client->getChannelMessage(
-            $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
+            $peer,
             $sourceMessage->external_message_id,
         );
 
@@ -98,7 +99,7 @@ class TelegramOwnerMediaDownloader
         try {
             if ($client instanceof TelegramMediaClient) {
                 $client->downloadMessageToFile(
-                    $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
+                    $peer,
                     $sourceMessage->external_message_id,
                     $temporaryPath,
                     $previewOnly,
