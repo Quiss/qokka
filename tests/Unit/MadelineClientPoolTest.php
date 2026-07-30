@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use Amp\Cancellation;
 use Amp\Http\Client\HttpClient;
 use App\Contracts\MadelineClient;
 use App\Models\TelegramAccount;
@@ -58,13 +59,19 @@ class MadelineClientPoolTest extends TestCase
     {
         return new class implements MadelineClient
         {
-            public function downloadToFile(mixed $media, string $path): string
-            {
+            public function downloadToFile(
+                mixed $media,
+                string $path,
+                ?Cancellation $cancellation = null,
+            ): string {
                 return $path;
             }
 
-            public function getChannelMessage(int|string $peer, int $messageId): ?array
-            {
+            public function getChannelMessage(
+                int|string $peer,
+                int $messageId,
+                ?Cancellation $cancellation = null,
+            ): ?array {
                 return null;
             }
 

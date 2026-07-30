@@ -16,6 +16,7 @@ class TelegramWaitForMediaDownloadsCommand extends Command
     {
         $timeout = max(0, (int) $this->option('timeout'));
         $deadline = microtime(true) + $timeout;
+        $nextStatusAt = 0.0;
 
         do {
             $busyAccounts = TelegramAccount::query()
@@ -32,7 +33,19 @@ class TelegramWaitForMediaDownloadsCommand extends Command
                 return self::SUCCESS;
             }
 
-            if (microtime(true) >= $deadline) {
+            $now = microtime(true);
+
+            if ($now >= $nextStatusAt) {
+                $secondsRemaining = max(0, (int) ceil($deadline - $now));
+                $this->line(
+                    'Ожидаем завершения media downloads для аккаунтов: '
+                    .$busyAccounts->pluck('name')->join(', ')
+                    .". Осталось до таймаута: {$secondsRemaining} сек.",
+                );
+                $nextStatusAt = $now + 10;
+            }
+
+            if ($now >= $deadline) {
                 $this->error(
                     'Не дождались завершения media downloads для аккаунтов: '
                     .$busyAccounts->pluck('name')->join(', ')

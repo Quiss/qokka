@@ -39,6 +39,7 @@ class TelegramOwnerHealthTest extends TestCase
         $this->assertTrue($lock->get());
 
         $this->artisan('telegram:wait-for-media-downloads', ['--timeout' => 0])
+            ->expectsOutputToContain('Ожидаем завершения media downloads')
             ->expectsOutputToContain($account->name)
             ->assertFailed();
 

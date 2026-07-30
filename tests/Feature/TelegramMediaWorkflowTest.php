@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use Amp\Cancellation;
 use App\Actions\ApprovePlannedPost;
 use App\Actions\IngestTelegramUpdate;
 use App\Contracts\MadelineClient;
@@ -305,15 +306,31 @@ class TelegramMediaWorkflowTest extends TestCase
             'mime_type' => 'image/jpeg',
         ]);
         app(MadelineOwnerLease::class)->heartbeat($messageAccount->uuid);
+        $operationCancellations = [];
         $client = Mockery::mock(MadelineClient::class);
-        $client->shouldReceive('getChannelMessage')->once()->andReturn([
-            '_' => 'message',
-            'id' => 100,
-            'media' => ['_' => 'messageMediaPhoto'],
-        ]);
+        $client->shouldReceive('getChannelMessage')
+            ->once()
+            ->andReturnUsing(function (
+                int|string $peer,
+                int $messageId,
+                ?Cancellation $cancellation,
+            ) use (&$operationCancellations): array {
+                $operationCancellations[] = $cancellation;
+
+                return [
+                    '_' => 'message',
+                    'id' => 100,
+                    'media' => ['_' => 'messageMediaPhoto'],
+                ];
+            });
         $client->shouldReceive('downloadToFile')
             ->once()
-            ->andReturnUsing(function (mixed $media, string $path): string {
+            ->andReturnUsing(function (
+                mixed $media,
+                string $path,
+                ?Cancellation $cancellation,
+            ) use (&$operationCancellations): string {
+                $operationCancellations[] = $cancellation;
                 File::put($path, 'downloaded');
 
                 return $path;
@@ -333,6 +350,8 @@ class TelegramMediaWorkflowTest extends TestCase
 
         $this->assertSame($messageAccount->id, $channel->fresh()->collector_telegram_account_id);
         $this->assertNotNull($asset->fresh()->path);
+        $this->assertContainsOnlyInstancesOf(Cancellation::class, $operationCancellations);
+        $this->assertSame($operationCancellations[0], $operationCancellations[1]);
     }
 
     public function test_media_download_fails_immediately_when_the_account_lock_is_busy(): void
@@ -749,7 +768,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturnNull();
         $client->shouldNotReceive('downloadToFile');
         $factory = Mockery::mock(MadelineClientFactory::class);
@@ -810,7 +829,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturn(['_' => 'message', 'id' => 100]);
         $client->shouldNotReceive('downloadToFile');
         $factory = Mockery::mock(MadelineClientFactory::class);
@@ -861,7 +880,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturn([
                 '_' => 'message',
                 'id' => 100,
@@ -932,7 +951,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturn([
                 '_' => 'message',
                 'id' => 100,
@@ -992,7 +1011,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturn([
                 '_' => 'message',
                 'id' => 100,
@@ -1048,7 +1067,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getChannelMessage')
             ->once()
-            ->with(-100123, 100)
+            ->with(-100123, 100, Mockery::type(Cancellation::class))
             ->andReturn([
                 '_' => 'message',
                 'id' => 100,

@@ -49,7 +49,9 @@ deploy:
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan deliveries:wait-for-publishing --timeout=$(PUBLISH_DRAIN_TIMEOUT); \
+	echo "Waiting for active Telegram media downloads (timeout: $(MEDIA_DOWNLOAD_DRAIN_TIMEOUT)s)..."; \
 	$(PRODUCTION_COMPOSE) exec app php artisan telegram:wait-for-media-downloads --timeout=$(MEDIA_DOWNLOAD_DRAIN_TIMEOUT); \
+	$(PRODUCTION_COMPOSE) stop --timeout 370 horizon; \
 	$(PRODUCTION_COMPOSE) stop --timeout 120 madeline; \
 	git pull; \
 	$(PHP_BOOTSTRAP) 'composer install --ignore-platform-req=ext-intl --no-dev --prefer-dist --no-interaction --optimize-autoloader'; \
@@ -59,7 +61,6 @@ deploy:
 	$(PRODUCTION_COMPOSE) exec madeline php artisan telegram:health --no-interaction; \
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
-	$(MAKE) restart-horizon; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_HIGH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(MEDIA_DOWNLOAD_LOW_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \

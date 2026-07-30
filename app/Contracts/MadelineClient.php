@@ -2,14 +2,24 @@
 
 namespace App\Contracts;
 
+use Amp\Cancellation;
+
 interface MadelineClient
 {
-    public function downloadToFile(mixed $media, string $path): string;
+    public function downloadToFile(
+        mixed $media,
+        string $path,
+        ?Cancellation $cancellation = null,
+    ): string;
 
     /**
      * @return array<string, mixed>|null
      */
-    public function getChannelMessage(int|string $peer, int $messageId): ?array;
+    public function getChannelMessage(
+        int|string $peer,
+        int $messageId,
+        ?Cancellation $cancellation = null,
+    ): ?array;
 
     /**
      * @return array<string, mixed>

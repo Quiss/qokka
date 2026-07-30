@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Amp\Cancellation;
 use App\Contracts\MadelineClient;
 use danog\MadelineProto\API;
 
@@ -11,16 +12,27 @@ class MadelineProtoClient implements MadelineClient
 
     public function __construct(private readonly API $api) {}
 
-    public function downloadToFile(mixed $media, string $path): string
-    {
-        return $this->api->downloadToFile($media, $path);
+    public function downloadToFile(
+        mixed $media,
+        string $path,
+        ?Cancellation $cancellation = null,
+    ): string {
+        return $this->api->downloadToFile(
+            messageMedia: $media,
+            file: $path,
+            cancellation: $cancellation,
+        );
     }
 
-    public function getChannelMessage(int|string $peer, int $messageId): ?array
-    {
+    public function getChannelMessage(
+        int|string $peer,
+        int $messageId,
+        ?Cancellation $cancellation = null,
+    ): ?array {
         $response = $this->api->channels->getMessages(
             channel: $peer,
             id: [$messageId],
+            cancellation: $cancellation,
         );
         $message = collect($response['messages'] ?? [])
             ->first(fn (array $message): bool => ($message['_'] ?? null) === 'message'

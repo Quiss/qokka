@@ -2,6 +2,8 @@
 
 namespace App\Jobs;
 
+use Amp\TimeoutCancellation;
+use Amp\TimeoutException;
 use App\Exceptions\PermanentTelegramMediaException;
 use App\MediaType;
 use App\Models\MediaAsset;
@@ -30,6 +32,8 @@ use Throwable;
 class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+
+    private const int JOB_OVERHEAD_SECONDS = 45;
 
     public const string HIGH_PRIORITY_QUEUE = 'media-download-high';
 
@@ -180,16 +184,42 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         File::ensureDirectoryExists(dirname($absolutePath));
         File::ensureDirectoryExists(dirname($temporaryPath));
         $startedAt = hrtime(true);
+        $clientStartedAt = hrtime(true);
         $getMessageStartedAt = null;
         $downloadStartedAt = null;
+        $operationTimeoutSeconds = $this->operationTimeoutSeconds();
+        $logContext = [
+            'media_asset_id' => $origin->id,
+            'source_message_id' => $sourceMessage->id,
+            'source_channel_id' => $sourceChannel->id,
+            'telegram_account_id' => $account->id,
+            'preview_only' => $this->previewOnly,
+            'attempt' => $this->attempts(),
+        ];
 
         try {
+            Log::info('Telegram media download started.', $logContext + [
+                'operation_timeout_seconds' => $operationTimeoutSeconds,
+            ]);
+
             $client = $clientPool->forAccount($account);
+            $cancellation = new TimeoutCancellation(
+                $operationTimeoutSeconds,
+                "Превышен лимит {$operationTimeoutSeconds} сек. на получение сообщения и скачивание медиа через MadelineProto IPC.",
+            );
+            Log::info('Telegram media IPC client is ready.', $logContext + [
+                'client_connect_ms' => $this->elapsedMilliseconds($clientStartedAt),
+            ]);
+
             $getMessageStartedAt = hrtime(true);
             $freshMessage = $client->getChannelMessage(
                 $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
                 $sourceMessage->external_message_id,
+                $cancellation,
             );
+            Log::info('Telegram media source message fetched.', $logContext + [
+                'get_message_ms' => $this->elapsedMilliseconds($getMessageStartedAt),
+            ]);
 
             if ($freshMessage === null || ! is_array($freshMessage['media'] ?? null)) {
                 $this->discardUnavailableMedia($origin, $mediaFileGarbageCollector);
@@ -198,9 +228,13 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             }
 
             $downloadStartedAt = hrtime(true);
+            Log::info('Telegram media file transfer started.', $logContext + [
+                'expected_bytes' => $origin->size_bytes,
+            ]);
             $client->downloadToFile(
                 $this->downloadReference($origin, $freshMessage),
                 $temporaryPath,
+                $cancellation,
             );
             $downloadedSize = $this->assertDownloadedFileIsComplete($origin, $temporaryPath);
 
@@ -239,18 +273,14 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             });
 
             Log::info('Telegram media download completed.', [
-                'media_asset_id' => $origin->id,
-                'source_message_id' => $sourceMessage->id,
-                'source_channel_id' => $sourceChannel->id,
-                'telegram_account_id' => $account->id,
-                'preview_only' => $this->previewOnly,
-                'attempt' => $this->attempts(),
+                ...$logContext,
                 'get_message_ms' => $this->elapsedMilliseconds($getMessageStartedAt, $downloadStartedAt),
                 'download_ms' => $this->elapsedMilliseconds($downloadStartedAt),
                 'total_ms' => $this->elapsedMilliseconds($startedAt),
                 'downloaded_bytes' => $downloadedSize,
             ]);
         } catch (Throwable $exception) {
+            $exception = $this->reportableException($exception);
             $this->deleteFilesWithoutFailingJob([$absolutePath]);
             $clientPool->forget($account);
             $this->rememberFailure(
@@ -265,6 +295,32 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
         } finally {
             $this->deleteFilesWithoutFailingJob([$temporaryPath, $temporaryPath.'.lock']);
         }
+    }
+
+    private function operationTimeoutSeconds(): float
+    {
+        $configuredTimeout = (float) config(
+            'services.telegram.media_operation_timeout_seconds',
+            285,
+        );
+        $maximumTimeout = max(0.001, $this->timeout - self::JOB_OVERHEAD_SECONDS);
+
+        return min(max(0.001, $configuredTimeout), $maximumTimeout);
+    }
+
+    private function reportableException(Throwable $exception): Throwable
+    {
+        $cause = $exception;
+
+        do {
+            if ($cause instanceof TimeoutException) {
+                return new RuntimeException($cause->getMessage(), previous: $exception);
+            }
+
+            $cause = $cause->getPrevious();
+        } while ($cause !== null);
+
+        return $exception;
     }
 
     public function failed(?Throwable $exception): void
