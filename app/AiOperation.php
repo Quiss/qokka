@@ -9,4 +9,5 @@ enum AiOperation: string
     case Rewrite = 'rewrite';
     case ReviewPlan = 'review_plan';
     case AnalyzeImage = 'analyze_image';
+    case GenerateTone = 'generate_tone';
 }

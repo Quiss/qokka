@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Publications\Schemas;
 
 use App\DestinationPlatform;
+use App\Filament\Resources\Publications\Actions\PublicationToneGenerationAction;
 use App\PublicationSignatureMode;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
@@ -57,6 +58,7 @@ class PublicationForm
                             ->columnSpanFull(),
                         Textarea::make('tone_prompt')
                             ->label('Редакционная инструкция для AI')
+                            ->afterLabel(PublicationToneGenerationAction::make())
                             ->helperText('Главная настройка стиля этого канала. Здесь задаются тон, объём, число абзацев, ритм, начало и финал, цитаты, жирные акценты, эмодзи, юмор и правила для разных тем. Приложение отдельно контролирует только достоверность, безопасный Markdown и подпись.')
                             ->rows(12)
                             ->autosize()
