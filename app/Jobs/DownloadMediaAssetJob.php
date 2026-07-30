@@ -215,7 +215,6 @@ class DownloadMediaAssetJob implements ShouldBeUnique, ShouldQueue
             $freshMessage = $client->getChannelMessage(
                 $sourceChannel->telegram_peer_id ?? $sourceChannel->telegramReference(),
                 $sourceMessage->external_message_id,
-                $cancellation,
             );
             Log::info('Telegram media source message fetched.', $logContext + [
                 'get_message_ms' => $this->elapsedMilliseconds($getMessageStartedAt),

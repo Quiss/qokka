@@ -15,11 +15,7 @@ interface MadelineClient
     /**
      * @return array<string, mixed>|null
      */
-    public function getChannelMessage(
-        int|string $peer,
-        int $messageId,
-        ?Cancellation $cancellation = null,
-    ): ?array;
+    public function getChannelMessage(int|string $peer, int $messageId): ?array;
 
     /**
      * @return array<string, mixed>

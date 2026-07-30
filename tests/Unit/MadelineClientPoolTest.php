@@ -67,11 +67,8 @@ class MadelineClientPoolTest extends TestCase
                 return $path;
             }
 
-            public function getChannelMessage(
-                int|string $peer,
-                int $messageId,
-                ?Cancellation $cancellation = null,
-            ): ?array {
+            public function getChannelMessage(int|string $peer, int $messageId): ?array
+            {
                 return null;
             }
 
