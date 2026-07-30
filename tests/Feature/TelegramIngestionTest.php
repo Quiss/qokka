@@ -59,8 +59,17 @@ class TelegramIngestionTest extends TestCase
             'collector_telegram_account_id' => $this->telegramAccount->id,
         ]);
         $action = app(IngestTelegramUpdate::class);
-        $first = $action->handle($this->payload(['message_id' => 10, 'grouped_id' => '777']));
-        $action->handle($this->payload(['message_id' => 11, 'grouped_id' => '777', 'text' => 'Вторая часть']));
+        $first = $action->handle($this->payload([
+            'message_id' => 10,
+            'grouped_id' => '777',
+            'media' => [$this->photo('photo:10')],
+        ]));
+        $action->handle($this->payload([
+            'message_id' => 11,
+            'grouped_id' => '777',
+            'text' => 'Вторая часть',
+            'media' => [$this->photo('photo:11')],
+        ]));
         $action->handle($this->payload(['event_type' => 'edit', 'message_id' => 10, 'grouped_id' => '777', 'text' => 'Исправлено']));
 
         $this->assertNotNull($first);
@@ -68,6 +77,19 @@ class TelegramIngestionTest extends TestCase
         $this->assertDatabaseCount('source_messages', 2);
         $this->assertSame("Исправлено\n\nВторая часть", $first->fresh()->text);
         $this->assertSame($channel->id, $first->source_channel_id);
+        $this->assertSame(1, $first->mediaAssets()->count());
+        $this->assertSame(
+            11,
+            $first->mediaAssets()->firstOrFail()->sourceMessage?->external_message_id,
+        );
+
+        $action->handle($this->payload([
+            'event_type' => 'delete',
+            'message_id' => 11,
+            'grouped_id' => '777',
+        ]));
+
+        $this->assertSame(0, $first->mediaAssets()->count());
     }
 
     /**
@@ -86,5 +108,17 @@ class TelegramIngestionTest extends TestCase
             'metrics' => ['views' => 1000],
             'media' => [],
         ], $overrides);
+    }
+
+    /** @return array<string, mixed> */
+    private function photo(string $externalId): array
+    {
+        return [
+            'type' => 'photo',
+            'external_id' => $externalId,
+            'mime_type' => 'image/jpeg',
+            'size_bytes' => 1000,
+            'metadata' => [],
+        ];
     }
 }

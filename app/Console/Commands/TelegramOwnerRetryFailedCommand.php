@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
-#[Signature('telegram:owner:retry-failed {--account= : ID Telegram-аккаунта} {--type= : Тип owner-команды}')]
+#[Signature('telegram:owner:retry-failed {--id= : ID owner-команды} {--account= : ID Telegram-аккаунта} {--type= : Тип owner-команды}')]
 #[Description('Повторно поставить терминально завершившиеся owner-команды')]
 class TelegramOwnerRetryFailedCommand extends Command
 {
@@ -16,6 +16,10 @@ class TelegramOwnerRetryFailedCommand extends Command
     {
         $query = TelegramOwnerCommand::query()
             ->where('status', TelegramOwnerCommandStatus::Failed);
+
+        if (filled($this->option('id'))) {
+            $query->whereKey((int) $this->option('id'));
+        }
 
         if (filled($this->option('account'))) {
             $query->where('telegram_account_id', (int) $this->option('account'));

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Actions\DetachUnavailableTelegramMedia;
 use App\Contracts\MadelineClient;
 use App\Contracts\TelegramMediaClient;
 use App\Exceptions\PermanentTelegramMediaException;
@@ -19,8 +20,18 @@ use Throwable;
 
 class TelegramOwnerMediaDownloader
 {
+    public function __construct(
+        private readonly DetachUnavailableTelegramMedia $detachUnavailableMedia,
+    ) {}
+
     /**
-     * @return array{media_asset_id: int, path: string, size_bytes: int}
+     * @return array{media_asset_id: int, path: string, size_bytes: int}|array{
+     *     media_asset_id: int,
+     *     detached: true,
+     *     already_missing?: true,
+     *     removed_planned_selections: int,
+     *     preserved_planned_selections: int
+     * }
      */
     public function handle(
         TelegramOwnerCommand $command,
@@ -33,7 +44,13 @@ class TelegramOwnerMediaDownloader
             ->find($mediaAssetId);
 
         if ($asset === null) {
-            throw new PermanentTelegramMediaException("Медиа {$mediaAssetId} не найдено.");
+            return [
+                'media_asset_id' => $mediaAssetId,
+                'detached' => true,
+                'already_missing' => true,
+                'removed_planned_selections' => 0,
+                'preserved_planned_selections' => 0,
+            ];
         }
 
         $origin = $asset->originMediaAsset ?? $asset;
@@ -82,10 +99,8 @@ class TelegramOwnerMediaDownloader
             $sourceMessage->external_message_id,
         );
 
-        if ($freshMessage === null || ! is_array($freshMessage['media'] ?? null)) {
-            throw new PermanentTelegramMediaException(
-                "Исходное Telegram-сообщение {$sourceMessage->external_message_id} больше не содержит медиа.",
-            );
+        if (! $this->hasDownloadableMedia($freshMessage)) {
+            return $this->detachUnavailableMedia->handle($origin);
         }
 
         $extension = $previewOnly ? 'jpg' : $this->extension($origin);
@@ -245,6 +260,17 @@ class TelegramOwnerMediaDownloader
             'ext' => '.jpg',
             'mime' => 'image/jpeg',
         ];
+    }
+
+    /** @param array<string, mixed>|null $message */
+    private function hasDownloadableMedia(?array $message): bool
+    {
+        $type = data_get($message, 'media._');
+
+        return in_array($type, [
+            'messageMediaPhoto',
+            'messageMediaDocument',
+        ], true);
     }
 
     private function extension(MediaAsset $asset): string

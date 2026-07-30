@@ -716,7 +716,7 @@ class TelegramMediaWorkflowTest extends TestCase
         Storage::disk('local')->assertExists($asset->fresh()->path);
     }
 
-    public function test_owner_download_marks_permanently_unavailable_media_without_deleting_editor_data(): void
+    public function test_owner_download_detaches_unavailable_media_and_unprepared_editor_selections(): void
     {
         Storage::fake('local');
         Storage::disk('local')->put('telegram/previews/unavailable.jpg', 'preview');
@@ -773,25 +773,21 @@ class TelegramMediaWorkflowTest extends TestCase
             ->with(-100123, 100)
             ->andReturnNull();
         $client->shouldNotReceive('downloadToFile');
-        try {
-            $this->runOwnerDownload($origin, $client);
-            $this->fail('Unavailable Telegram media should fail permanently.');
-        } catch (PermanentTelegramMediaException) {
-            $this->addToAssertionCount(1);
-        }
+        $result = $this->runOwnerDownload($origin, $client);
 
-        $this->assertModelExists($origin);
-        $this->assertModelExists($firstSelection);
-        $this->assertModelExists($secondSelection);
-        $this->assertNotNull($origin->fresh()->failed_at);
-        $this->assertNotNull($firstSelection->fresh()->failed_at);
-        $this->assertNotNull($secondSelection->fresh()->failed_at);
-        $this->assertSame(1, $firstPlannedPost->mediaAssets()->count());
-        $this->assertSame(1, $secondPlannedPost->mediaAssets()->count());
-        Storage::disk('local')->assertExists('telegram/previews/unavailable.jpg');
+        $this->assertTrue($result['detached']);
+        $this->assertSame(2, $result['removed_planned_selections']);
+        $this->assertSame(0, $result['preserved_planned_selections']);
+        $this->assertModelMissing($origin);
+        $this->assertModelMissing($firstSelection);
+        $this->assertModelMissing($secondSelection);
+        $this->assertSame(0, $sourcePost->mediaAssets()->count());
+        $this->assertSame(0, $firstPlannedPost->mediaAssets()->count());
+        $this->assertSame(0, $secondPlannedPost->mediaAssets()->count());
+        Storage::disk('local')->assertMissing('telegram/previews/unavailable.jpg');
     }
 
-    public function test_missing_preview_source_keeps_an_already_downloaded_video(): void
+    public function test_empty_telegram_media_keeps_an_already_downloaded_editor_video(): void
     {
         Storage::fake('local');
         Storage::disk('local')->put('telegram/media/video.mp4', 'video');
@@ -833,21 +829,42 @@ class TelegramMediaWorkflowTest extends TestCase
         $client->shouldReceive('getChannelMessage')
             ->once()
             ->with(-100123, 100)
-            ->andReturn(['_' => 'message', 'id' => 100]);
+            ->andReturn([
+                '_' => 'message',
+                'id' => 100,
+                'media' => ['_' => 'messageMediaEmpty'],
+            ]);
         $client->shouldNotReceive('downloadToFile');
-        try {
-            $this->runOwnerDownload($origin, $client, previewOnly: true);
-            $this->fail('Missing Telegram preview should fail permanently.');
-        } catch (PermanentTelegramMediaException) {
-            $this->addToAssertionCount(1);
-        }
 
-        $this->assertModelExists($origin);
+        $result = $this->runOwnerDownload($origin, $client, previewOnly: true);
+
+        $this->assertTrue($result['detached']);
+        $this->assertSame(0, $result['removed_planned_selections']);
+        $this->assertSame(1, $result['preserved_planned_selections']);
+        $this->assertModelMissing($origin);
         $this->assertModelExists($selection);
-        $this->assertNotNull($origin->fresh()->preview_failed_at);
-        $this->assertNotNull($selection->fresh()->preview_failed_at);
+        $this->assertNull($selection->fresh()->origin_media_asset_id);
+        $this->assertNull($selection->fresh()->preview_failed_at);
+        $this->assertSame(0, $sourcePost->mediaAssets()->count());
         $this->assertSame('telegram/media/video.mp4', $selection->fresh()->path);
         Storage::disk('local')->assertExists('telegram/media/video.mp4');
+    }
+
+    public function test_owner_download_treats_an_already_detached_asset_as_success(): void
+    {
+        $client = Mockery::mock(MadelineClient::class);
+        $client->shouldNotReceive('getChannelMessage');
+        $command = new TelegramOwnerCommand([
+            'type' => TelegramOwnerCommandType::DownloadMediaPreview,
+            'payload' => ['media_asset_id' => 999],
+        ]);
+
+        $result = app(TelegramOwnerMediaDownloader::class)
+            ->handle($command, $client, true);
+
+        $this->assertTrue($result['detached']);
+        $this->assertTrue($result['already_missing']);
+        $this->assertSame(999, $result['media_asset_id']);
     }
 
     public function test_download_job_removes_partial_file_after_telegram_cdn_failure(): void
@@ -1171,11 +1188,12 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame('telegram/video.mp4', $selectedAsset->fresh()->path);
     }
 
+    /** @return array<string, mixed> */
     private function runOwnerDownload(
         MediaAsset $asset,
         MadelineClient $client,
         bool $previewOnly = false,
-    ): void {
+    ): array {
         $command = new TelegramOwnerCommand([
             'type' => $previewOnly
                 ? TelegramOwnerCommandType::DownloadMediaPreview
@@ -1185,7 +1203,7 @@ class TelegramMediaWorkflowTest extends TestCase
         $downloader = app(TelegramOwnerMediaDownloader::class);
 
         try {
-            $downloader->handle($command, $client, $previewOnly);
+            return $downloader->handle($command, $client, $previewOnly);
         } catch (Throwable $exception) {
             $downloader->recordFailure($command, $exception, $previewOnly);
 

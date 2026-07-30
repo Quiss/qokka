@@ -10,6 +10,7 @@ class TelegramApiServerException extends RuntimeException
         string $message,
         public readonly ?string $rpc = null,
         int $code = 0,
+        public readonly ?string $remoteException = null,
     ) {
         parent::__construct($message, $code);
     }

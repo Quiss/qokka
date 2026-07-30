@@ -70,4 +70,26 @@ class TelegramOwnerHealthTest extends TestCase
             )
             ->assertSuccessful();
     }
+
+    public function test_failed_owner_command_can_be_retried_by_id(): void
+    {
+        $account = TelegramAccount::factory()->create();
+        $target = TelegramOwnerCommand::factory()->for($account)->create([
+            'status' => TelegramOwnerCommandStatus::Failed,
+            'attempts' => 3,
+        ]);
+        $other = TelegramOwnerCommand::factory()->for($account)->create([
+            'status' => TelegramOwnerCommandStatus::Failed,
+            'attempts' => 3,
+        ]);
+
+        $this->artisan('telegram:owner:retry-failed', ['--id' => $target->id])
+            ->expectsOutput('Повторно поставлено owner-команд: 1.')
+            ->assertSuccessful();
+
+        $this->assertSame(TelegramOwnerCommandStatus::Pending, $target->fresh()->status);
+        $this->assertSame(0, $target->fresh()->attempts);
+        $this->assertSame(TelegramOwnerCommandStatus::Failed, $other->fresh()->status);
+        $this->assertSame(3, $other->fresh()->attempts);
+    }
 }

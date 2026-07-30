@@ -9,6 +9,7 @@ use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\TelegramAccount;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -18,6 +19,7 @@ class IngestTelegramUpdate
 {
     public function __construct(
         private readonly RequestTelegramMediaDownload $requestMediaDownload,
+        private readonly DetachUnavailableTelegramMedia $detachUnavailableMedia,
     ) {}
 
     /** @param array<string, mixed> $payload */
@@ -115,10 +117,15 @@ class IngestTelegramUpdate
             );
 
             $mediaRequests = [];
+            $incomingMedia = $isMetricsUpdate || ! is_array($payload['media'] ?? null)
+                ? []
+                : $payload['media'];
+            $incomingIngestKeys = [];
 
-            foreach ($isMetricsUpdate ? [] : ($payload['media'] ?? []) as $index => $media) {
+            foreach ($incomingMedia as $index => $media) {
                 $type = MediaType::tryFrom($media['type'] ?? '') ?? MediaType::Document;
                 $ingestKey = $message->id.':'.$index;
+                $incomingIngestKeys[] = $ingestKey;
                 $externalId = (string) ($media['external_id'] ?? $ingestKey);
                 $asset = $sourcePost->mediaAssets()->firstOrNew(['ingest_key' => $ingestKey]);
                 $isSameMedia = $asset->exists && $asset->external_id === $externalId;
@@ -164,6 +171,23 @@ class IngestTelegramUpdate
                 } elseif ($asset->preview_path === null && $type === MediaType::Video && filled(data_get($asset->metadata, 'thumbnail_type'))) {
                     $mediaRequests[] = [$asset->id, true];
                 }
+            }
+
+            if (! $isMetricsUpdate) {
+                $staleMediaQuery = $sourcePost->mediaAssets()
+                    ->where('source_message_id', $message->id);
+
+                if ($incomingIngestKeys !== []) {
+                    $staleMediaQuery->where(
+                        fn (Builder $query): Builder => $query
+                            ->whereNull('ingest_key')
+                            ->orWhereNotIn('ingest_key', $incomingIngestKeys),
+                    );
+                }
+
+                $staleMediaQuery
+                    ->get()
+                    ->each($this->detachUnavailableMedia->handle(...));
             }
 
             $activeMessages = $sourcePost->messages()->whereNull('deleted_at')->orderBy('external_message_id')->get();

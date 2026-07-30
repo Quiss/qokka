@@ -58,10 +58,10 @@ class TelegramApiServerClient implements MadelineClient, TelegramMediaClient
 
     public function getChannelMessage(int|string $peer, int $messageId): ?array
     {
-        $response = $this->call('getMessages', [
+        $response = $this->callForPeer('getMessages', [
             'peer' => $peer,
             'id' => [$messageId],
-        ]);
+        ], $peer);
         $messages = is_array($response['messages'] ?? null) ? $response['messages'] : [];
 
         return collect($messages)->first(
@@ -73,16 +73,16 @@ class TelegramApiServerClient implements MadelineClient, TelegramMediaClient
 
     public function getHistory(int|string $peer, int $offsetId, int $limit): array
     {
-        return $this->call('messages.getHistory', [
+        return $this->callForPeer('messages.getHistory', [
             'peer' => $peer,
             'offset_id' => $offsetId,
             'limit' => $limit,
-        ]);
+        ], $peer);
     }
 
     public function getInfo(mixed $peer): array|string|int
     {
-        $response = $this->call('getInfo', ['id' => $peer]);
+        $response = $this->callForPeer('getInfo', ['id' => $peer], $peer);
 
         return $response['value'] ?? $response;
     }
@@ -151,6 +151,28 @@ class TelegramApiServerClient implements MadelineClient, TelegramMediaClient
     private function call(string $method, array $parameters = []): array
     {
         return $this->server->call($this->session, $method, $parameters);
+    }
+
+    /**
+     * @param  array<string, mixed>  $parameters
+     * @return array<string, mixed>
+     */
+    private function callForPeer(string $method, array $parameters, mixed $peer): array
+    {
+        try {
+            return $this->call($method, $parameters);
+        } catch (TelegramApiServerException $exception) {
+            if (
+                ! is_int($peer)
+                || $exception->remoteException !== 'danog\\MadelineProto\\PeerNotInDbException'
+            ) {
+                throw $exception;
+            }
+
+            $this->call('getDialogIds');
+
+            return $this->call($method, $parameters);
+        }
     }
 
     private function editBanned(int|string $channel, int $participantId, bool $banned): void

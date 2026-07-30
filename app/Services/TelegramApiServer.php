@@ -111,6 +111,7 @@ class TelegramApiServer
             $message,
             $this->rpcCode($message),
             is_numeric($error['code'] ?? null) ? (int) $error['code'] : $status,
+            is_string($error['exception'] ?? null) ? $error['exception'] : null,
         );
     }
 
