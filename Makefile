@@ -39,7 +39,8 @@ first:
 deploy:
 	@set -eu; \
 	DEPLOY_READY=0; \
-	trap 'if [ "$$DEPLOY_READY" -ne 1 ]; then echo "Deploy failed before TelegramApiServer readiness; queues remain paused."; fi' 0 1 2 15; \
+	DEPLOY_STAGE=initialization; \
+	trap 'if [ "$$DEPLOY_READY" -ne 1 ]; then echo "Deploy failed during $$DEPLOY_STAGE; queues remain paused."; fi' 0 1 2 15; \
 	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:pause; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(PUBLISH_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:pause $(TELEGRAM_QUEUE); \
@@ -56,13 +57,15 @@ deploy:
 	$(MAKE) verify-postgres-capacity; \
 	$(MAKE) restart-app; \
 	$(MAKE) restart-scheduler; \
+	DEPLOY_STAGE=telegram-api; \
 	$(PRODUCTION_COMPOSE) build --pull --no-cache telegram-api; \
 	$(MAKE) prepare-telegram-api-storage; \
 	$(PRODUCTION_COMPOSE) up -d --no-build --wait --wait-timeout 240 telegram-api; \
 	$(PRODUCTION_COMPOSE) exec app php artisan telegram:api:health --no-interaction; \
 	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 telegram-events telegram-owner; \
+	DEPLOY_STAGE=horizon; \
 	$(MAKE) restart-horizon; \
-	$(PRODUCTION_COMPOSE) up -d --wait --wait-timeout 180 horizon; \
+	DEPLOY_STAGE=media-backlog; \
 	$(PRODUCTION_COMPOSE) exec app php artisan telegram:media:request-missing --include-failed; \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(TELEGRAM_QUEUE); \
 	$(PRODUCTION_COMPOSE) exec app php artisan queue:continue $(PUBLISH_QUEUE); \
@@ -177,8 +180,10 @@ restart-app:
 
 # Restart Horizon (graceful)
 restart-horizon:
-	$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:terminate
-	@echo "Horizon will restart automatically"
+	-$(PRODUCTION_COMPOSE) exec horizon php artisan horizon:terminate
+	$(PRODUCTION_COMPOSE) restart --timeout 370 horizon
+	$(PRODUCTION_COMPOSE) up -d --no-deps --wait --wait-timeout 180 horizon
+	@echo "Horizon restarted"
 
 # Restart Scheduler (with lock cleanup)
 restart-scheduler:

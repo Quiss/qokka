@@ -63,6 +63,8 @@ class ProductionDeploymentConfigurationTest extends TestCase
     public function test_deploy_gracefully_restarts_horizon_after_code_update_and_waits_for_telegram_api(): void
     {
         $makefile = File::get(base_path('Makefile'));
+        $compose = File::get(base_path('docker-compose.production.yml'));
+        $horizon = Str::between($compose, "  horizon:\n", "\n  # TelegramApiServer");
         $deploy = Str::between($makefile, "deploy:\n", "\ndeploy-full:");
         $restartHorizon = Str::between(
             $makefile,
@@ -110,9 +112,20 @@ class ProductionDeploymentConfigurationTest extends TestCase
         $this->assertTrue($restartHorizonPosition < $requestMissingPosition);
         $this->assertTrue($requestMissingPosition < $continueTelegramPosition);
         $this->assertStringContainsString('horizon:terminate', $restartHorizon);
+        $this->assertStringContainsString('restart --timeout 370 horizon', $restartHorizon);
+        $this->assertStringContainsString(
+            'up -d --no-deps --wait --wait-timeout 180 horizon',
+            $restartHorizon,
+        );
+        $this->assertStringContainsString('[ $$status -le 1 ]', $horizon);
+        $this->assertStringContainsString('Deploy failed during $$DEPLOY_STAGE', $deploy);
         $this->assertStringContainsString('queues remain paused', $deploy);
         $this->assertStringNotContainsString('composer reinstall amphp/postgres', $deploy);
         $this->assertStringNotContainsString('stop --timeout 370 horizon', $deploy);
+        $this->assertStringNotContainsString(
+            'up -d --wait --wait-timeout 180 horizon',
+            $deploy,
+        );
         $this->assertStringNotContainsString('horizon:clear --queue=media-download-', $deploy);
         $this->assertStringNotContainsString('$(MAKE) restart-all', $deploy);
         $this->assertSame(0, substr_count($deploy, 'exec horizon php artisan horizon:continue'));
