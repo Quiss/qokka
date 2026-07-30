@@ -10,18 +10,25 @@ class MadelineProtoClient implements MadelineClient
 {
     private const int MUTE_FOREVER_UNTIL = 2147483647;
 
-    public function __construct(private readonly API $api) {}
+    public function __construct(
+        private readonly API $api,
+        private readonly MadelineIpcCompatibility $ipcCompatibility,
+    ) {}
 
     public function downloadToFile(
         mixed $media,
         string $path,
         ?Cancellation $cancellation = null,
     ): string {
-        return $this->api->downloadToFile(
+        $download = fn (): string => $this->api->downloadToFile(
             messageMedia: $media,
             file: $path,
             cancellation: $cancellation,
         );
+
+        return $cancellation === null
+            ? $download()
+            : $this->ipcCompatibility->runWithCancellation($download);
     }
 
     public function getChannelMessage(int|string $peer, int $messageId): ?array
