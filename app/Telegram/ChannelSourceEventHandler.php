@@ -38,7 +38,9 @@ final class ChannelSourceEventHandler extends SimpleEventHandler
     public function onStart(): void
     {
         $this->heartbeatOwner();
-        $this->refreshSubscriptions();
+        $this->callFork(function (): void {
+            $this->refreshSubscriptions();
+        });
     }
 
     #[Cron(period: 5.0)]
