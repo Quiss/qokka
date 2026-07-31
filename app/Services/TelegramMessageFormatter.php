@@ -124,6 +124,10 @@ class TelegramMessageFormatter
             return '';
         }
 
+        if ($node->tagName === 'ol') {
+            return $this->renderOrderedList($node);
+        }
+
         $contents = $this->renderChildren($node);
 
         return match ($node->tagName) {
@@ -137,6 +141,25 @@ class TelegramMessageFormatter
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6' => '<b>'.$contents."</b>\n\n",
             default => $contents,
         };
+    }
+
+    private function renderOrderedList(DOMElement $node): string
+    {
+        $number = $node->hasAttribute('start')
+            ? (int) $node->getAttribute('start')
+            : 1;
+        $items = [];
+
+        foreach ($node->childNodes as $child) {
+            if (! $child instanceof DOMElement || $child->tagName !== 'li') {
+                continue;
+            }
+
+            $items[] = $number.'. '.trim($this->renderChildren($child));
+            $number++;
+        }
+
+        return implode("\n", $items)."\n\n";
     }
 
     private function renderLink(DOMElement $node, string $contents): string

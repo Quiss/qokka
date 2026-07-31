@@ -47,6 +47,29 @@ class TelegramMessageFormatterTest extends TestCase
         );
     }
 
+    public function test_it_preserves_ordered_list_numbers_and_inline_formatting(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml(
+            "**Приготовление:**\n\n1. Нарезать **кабачки**.\n2. Запечь.\n3. Перемешать.",
+        );
+
+        $this->assertSame(
+            "<b>Приготовление:</b>\n\n1. Нарезать <b>кабачки</b>.\n2. Запечь.\n3. Перемешать.",
+            $html,
+        );
+    }
+
+    public function test_it_preserves_the_ordered_list_starting_number(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml("5. Пятый\n6. Шестой");
+
+        $this->assertSame("5. Пятый\n6. Шестой", $html);
+    }
+
     public function test_it_splits_long_messages_by_telegram_text_length(): void
     {
         $formatter = new TelegramMessageFormatter;
