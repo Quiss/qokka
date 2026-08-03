@@ -37,6 +37,7 @@ class JsonCollectionSourceSynchronizer
                 'hours' => $source->lookbackHours(),
                 'limit' => $source->requestLimit(),
             ]);
+        \Log::info($endpointUrl, $source->credentials);
 
         if ($response->status() >= 300 && $response->status() < 400) {
             throw new RuntimeException('Редиректы endpoint источника запрещены.');
@@ -233,7 +234,7 @@ class JsonCollectionSourceSynchronizer
             ->withOptions(['allow_redirects' => false]);
 
         if ($source->authorization() !== null) {
-            $request->withHeaders(['Authorization' => 'Bearer ' . $source->authorization()]);
+            $request->withHeaders(['Authorization' => $source->authorization()]);
         }
 
         return $request;
