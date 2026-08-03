@@ -32,7 +32,7 @@ class StoryCandidatesTable
         return $table
             ->modifyQueryUsing(fn (Builder $query): Builder => $query->with([
                 'contentPlan',
-                'sourcePosts.sourceChannel',
+                'sourcePosts.source',
                 'sourcePosts.mediaAssets',
             ]))
             ->defaultSort(function (Builder $query): Builder {

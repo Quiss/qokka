@@ -8,7 +8,7 @@ use App\Models\AiRun;
 use App\Models\ContentPlan;
 use App\Models\PlannedPost;
 use App\Models\Publication;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
 use App\PlannedPostStatus;
@@ -195,10 +195,10 @@ class RecentPublicationHistoryTest extends TestCase
             publishedAt: now()->subDay(),
         );
         $currentPlan = ContentPlan::factory()->for($publication)->create();
-        $sourcePost = SourcePost::factory()->for(SourceChannel::factory())->create([
+        $sourcePost = SourcePost::factory()->for(Source::factory())->create([
             'text' => 'Сегодня начала работать новая станция метро.',
             'posted_at' => now()->subHour(),
-        ])->load(['sourceChannel', 'mediaAssets']);
+        ])->load(['source', 'mediaAssets']);
         $duplicateCluster = [[
             'source_post_ids' => [$sourcePost->id],
             'title' => 'Открылась новая станция метро',
@@ -227,7 +227,7 @@ class RecentPublicationHistoryTest extends TestCase
         $this->assertStringNotContainsString('recent_committed_posts', $validationPrompt);
         $this->assertStringNotContainsString('В городе открыли новую станцию метро', $validationPrompt);
         $this->assertSame(
-            ['v5', 'v5'],
+            ['v6', 'v6'],
             AiRun::query()->oldest('id')->pluck('prompt_version')->all(),
         );
     }
@@ -297,7 +297,7 @@ class RecentPublicationHistoryTest extends TestCase
         $reviewPrompt = (string) data_get(Http::recorded()[0][0]->data(), 'messages.1.content');
         $this->assertStringContainsString('В городе открыли новую станцию метро', $reviewPrompt);
         $this->assertStringContainsString('duplicate_recent_publication', $reviewPrompt);
-        $this->assertSame('v5', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v6', AiRun::query()->sole()->prompt_version);
     }
 
     private function createPlannedPost(

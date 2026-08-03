@@ -2,17 +2,21 @@
 
 namespace App\Actions;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use App\TelegramSourceAccessStatus;
 
 class AssignTelegramCollector
 {
     public function handle(
-        SourceChannel $sourceChannel,
+        Source $source,
         bool $clearWhenUnavailable = true,
     ): ?TelegramAccount {
-        $accounts = $sourceChannel->telegramAccounts()
+        if (! $source->isTelegram()) {
+            return null;
+        }
+
+        $accounts = $source->telegramAccounts()
             ->wherePivot('access_status', TelegramSourceAccessStatus::Available->value)
             ->collectorReady()
             ->withCount('assignedSourceChannels')
@@ -20,10 +24,10 @@ class AssignTelegramCollector
             ->orderBy('telegram_accounts.id')
             ->get();
 
-        if ($sourceChannel->preferred_collector_telegram_account_id !== null) {
+        if ($source->preferred_collector_telegram_account_id !== null) {
             $preferredAccount = $accounts->firstWhere(
                 'id',
-                $sourceChannel->preferred_collector_telegram_account_id,
+                $source->preferred_collector_telegram_account_id,
             );
 
             if ($preferredAccount !== null) {
@@ -34,8 +38,8 @@ class AssignTelegramCollector
         }
 
         foreach ($accounts as $account) {
-            if ($sourceChannel->collector_telegram_account_id !== $account->id) {
-                $sourceChannel->update([
+            if ($source->collector_telegram_account_id !== $account->id) {
+                $source->update([
                     'collector_telegram_account_id' => $account->id,
                 ]);
             }
@@ -43,8 +47,8 @@ class AssignTelegramCollector
             return $account;
         }
 
-        if ($clearWhenUnavailable && $sourceChannel->collector_telegram_account_id !== null) {
-            $sourceChannel->update([
+        if ($clearWhenUnavailable && $source->collector_telegram_account_id !== null) {
+            $source->update([
                 'collector_telegram_account_id' => null,
             ]);
         }

@@ -18,9 +18,9 @@ class SourceGroupsTable
                 TextColumn::make('name')
                     ->label('Группа')
                     ->searchable(),
-                TextColumn::make('source_channels_count')
+                TextColumn::make('sources_count')
                     ->label('Источников')
-                    ->counts('sourceChannels'),
+                    ->counts('sources'),
                 IconColumn::make('is_active')
                     ->label('Активна')
                     ->boolean(),

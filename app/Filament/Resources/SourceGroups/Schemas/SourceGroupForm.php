@@ -20,9 +20,9 @@ class SourceGroupForm
                 Textarea::make('description')
                     ->label('Описание')
                     ->columnSpanFull(),
-                Select::make('sourceChannels')
+                Select::make('sources')
                     ->label('Источники')
-                    ->relationship('sourceChannels', 'title')
+                    ->relationship('sources', 'title')
                     ->multiple()
                     ->preload()
                     ->searchable()

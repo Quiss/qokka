@@ -80,7 +80,7 @@ class QueueFailedJobOperationsNotification
         }
 
         $asset = MediaAsset::query()
-            ->with('originMediaAsset.sourceMessage.sourceChannel')
+            ->with('originMediaAsset.sourceMessage.source')
             ->find($job->mediaAssetId);
 
         if ($asset === null) {
@@ -100,15 +100,15 @@ class QueueFailedJobOperationsNotification
         $accountId = is_array($lastError) ? ($lastError['telegram_account_id'] ?? null) : null;
         $sourceMessage = $origin->sourceMessage;
         $sourceMessageId = $origin->source_message_id;
-        $sourceChannelId = $sourceMessageId === null
+        $sourceId = $sourceMessageId === null
             ? null
-            : $sourceMessage->source_channel_id;
+            : $sourceMessage->source_id;
 
         return [
             'error' => $message,
             'asset' => 'Медиа: #'.$origin->id
                 .', сообщение: '.($sourceMessageId ?? '—')
-                .', источник: '.($sourceChannelId ?? '—')
+                .', источник: '.($sourceId ?? '—')
                 .', аккаунт: '.($accountId ?? '—'),
         ];
     }

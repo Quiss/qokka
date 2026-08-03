@@ -2,8 +2,9 @@
 
 namespace App\Models;
 
+use App\SourceType;
 use App\TelegramSourceAccessStatus;
-use Database\Factories\SourceChannelFactory;
+use Database\Factories\SourceFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -18,6 +19,7 @@ use Illuminate\Support\Str;
 
 /**
  * @property int $id
+ * @property SourceType $type
  * @property int|null $collector_telegram_account_id
  * @property int|null $preferred_collector_telegram_account_id
  * @property int|null $telegram_peer_id
@@ -25,7 +27,15 @@ use Illuminate\Support\Str;
  * @property string $title
  * @property numeric-string $weight
  * @property bool $is_active
+ * @property string|null $endpoint_url
+ * @property array<string, mixed> $settings
+ * @property array<string, mixed>|null $credentials
  * @property array<string, mixed>|null $metadata
+ * @property array<string, mixed>|null $last_sync_summary
+ * @property Carbon|null $last_event_at
+ * @property Carbon|null $last_backfilled_at
+ * @property Carbon|null $last_synced_at
+ * @property string|null $last_sync_error
  * @property int $posts_last_day_count
  * @property int $views_last_day
  * @property int $forwards_last_day
@@ -36,28 +46,57 @@ use Illuminate\Support\Str;
  * @property-read TelegramAccount|null $collectorTelegramAccount
  * @property-read TelegramAccount|null $preferredCollectorTelegramAccount
  */
-#[Fillable(['collector_telegram_account_id', 'preferred_collector_telegram_account_id', 'telegram_peer_id', 'username', 'title', 'weight', 'is_active', 'last_event_at', 'last_backfilled_at', 'metadata'])]
-class SourceChannel extends Model
+#[Fillable([
+    'type',
+    'collector_telegram_account_id',
+    'preferred_collector_telegram_account_id',
+    'telegram_peer_id',
+    'username',
+    'title',
+    'weight',
+    'is_active',
+    'last_event_at',
+    'last_backfilled_at',
+    'metadata',
+    'endpoint_url',
+    'settings',
+    'credentials',
+    'last_synced_at',
+    'last_sync_error',
+    'last_sync_summary',
+])]
+class Source extends Model
 {
-    /** @use HasFactory<SourceChannelFactory> */
+    /** @use HasFactory<SourceFactory> */
     use HasFactory;
 
-    protected $attributes = ['weight' => 1, 'is_active' => true];
+    protected $attributes = [
+        'type' => 'telegram',
+        'weight' => 1,
+        'is_active' => true,
+        'settings' => '{}',
+    ];
+
+    protected $hidden = ['credentials'];
 
     protected static function booted(): void
     {
-        static::creating(function (SourceChannel $channel): void {
-            $channel->username = filled($channel->username)
-                ? self::normalizeUsername((string) $channel->username)
+        static::creating(function (Source $source): void {
+            if (! $source->isTelegram()) {
+                return;
+            }
+
+            $source->username = filled($source->username)
+                ? self::normalizeUsername((string) $source->username)
                 : null;
-            $channel->title = filled($channel->title)
-                ? $channel->title
-                : ($channel->username ? '@'.$channel->username : (string) $channel->telegram_peer_id);
+            $source->title = filled($source->title)
+                ? $source->title
+                : ($source->username ? '@'.$source->username : (string) $source->telegram_peer_id);
         });
 
-        static::updating(function (SourceChannel $channel): void {
-            if ($channel->isDirty('username') && filled($channel->username)) {
-                $channel->username = self::normalizeUsername((string) $channel->username);
+        static::updating(function (Source $source): void {
+            if ($source->isTelegram() && $source->isDirty('username') && filled($source->username)) {
+                $source->username = self::normalizeUsername((string) $source->username);
             }
         });
     }
@@ -70,6 +109,33 @@ class SourceChannel extends Model
         return ltrim(Str::before($value, '/'), '@');
     }
 
+    public function isTelegram(): bool
+    {
+        return $this->type === SourceType::Telegram;
+    }
+
+    public function isJsonCollection(): bool
+    {
+        return $this->type === SourceType::JsonCollection;
+    }
+
+    public function authorization(): ?string
+    {
+        $authorization = data_get($this->credentials, 'authorization');
+
+        return is_string($authorization) && filled($authorization) ? $authorization : null;
+    }
+
+    public function lookbackHours(): int
+    {
+        return max(1, (int) data_get($this->settings, 'lookback_hours', 24));
+    }
+
+    public function requestLimit(): int
+    {
+        return max(1, min(100, (int) data_get($this->settings, 'limit', 100)));
+    }
+
     public function telegramReference(): int|string
     {
         return filled($this->username) ? '@'.$this->username : (int) $this->telegram_peer_id;
@@ -78,7 +144,7 @@ class SourceChannel extends Model
     /** @return BelongsToMany<SourceGroup, $this> */
     public function sourceGroups(): BelongsToMany
     {
-        return $this->belongsToMany(SourceGroup::class);
+        return $this->belongsToMany(SourceGroup::class, 'source_group_source');
     }
 
     /** @return BelongsToMany<TelegramAccount, $this> */
@@ -180,8 +246,9 @@ class SourceChannel extends Model
         return $this->hasMany(SourceMessage::class);
     }
 
-    /** @param Builder<SourceChannel> $query
-     * @return Builder<SourceChannel>
+    /**
+     * @param  Builder<Source>  $query
+     * @return Builder<Source>
      */
     public function scopeWithLastDayStatistics(Builder $query): Builder
     {
@@ -208,11 +275,16 @@ class SourceChannel extends Model
     protected function casts(): array
     {
         return [
+            'type' => SourceType::class,
             'weight' => 'decimal:2',
             'is_active' => 'boolean',
             'last_event_at' => 'datetime',
             'last_backfilled_at' => 'datetime',
+            'last_synced_at' => 'datetime',
+            'settings' => 'array',
+            'credentials' => 'encrypted:array',
             'metadata' => 'array',
+            'last_sync_summary' => 'array',
         ];
     }
 

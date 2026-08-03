@@ -33,7 +33,7 @@ class GenerateCandidateBatch
         int $lookbackHours = 24,
         ?int $targetOverride = null,
     ): ContentPlan {
-        $contentPlan->loadMissing('publication.sourceGroup.sourceChannels');
+        $contentPlan->loadMissing('publication.sourceGroup.sources');
 
         if (! $append && $contentPlan->plannedPosts()->exists()) {
             throw new LogicException('A content plan with planned posts cannot be regenerated.');
@@ -53,12 +53,12 @@ class GenerateCandidateBatch
                 ])
                 ->count();
         $requestedCandidates = $targetOverride ?? max(0, $candidateTarget - $preservedCandidateCount);
-        $channelIds = $publication->sourceGroup->sourceChannels
+        $sourceIds = $publication->sourceGroup->sources
             ->where('is_active', true)
             ->pluck('id');
         $posts = SourcePost::query()
-            ->with(['sourceChannel', 'mediaAssets'])
-            ->whereIn('source_channel_id', $channelIds)
+            ->with(['source', 'mediaAssets'])
+            ->whereIn('source_id', $sourceIds)
             ->where('status', 'active')
             ->whereNull('deleted_at')
             ->whereBetween('posted_at', [now()->subHours($lookbackHours), now()])

@@ -23,7 +23,7 @@ class PostsRelationManager extends RelationManager
 {
     protected static string $relationship = 'posts';
 
-    protected static ?string $title = 'Посты и статистика за последние 24 часа';
+    protected static ?string $title = 'Материалы за последние 24 часа';
 
     public function form(Schema $schema): Schema
     {
@@ -35,7 +35,7 @@ class PostsRelationManager extends RelationManager
         return $table
             ->recordTitleAttribute('text')
             ->modifyQueryUsing(fn (Builder $query): Builder => $query
-                ->with(['sourceChannel', 'mediaAssets'])
+                ->with(['source', 'mediaAssets'])
                 ->where('posted_at', '>=', now()->subDay())
                 ->where('status', 'active')
                 ->whereNull('deleted_at')
@@ -99,8 +99,8 @@ class PostsRelationManager extends RelationManager
                     ])
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Закрыть'),
-                Action::make('telegram')
-                    ->label('В Telegram')
+                Action::make('source')
+                    ->label('Открыть источник')
                     ->icon('heroicon-m-arrow-top-right-on-square')
                     ->url(fn (SourcePost $record): ?string => $record->source_url)
                     ->openUrlInNewTab()
@@ -110,7 +110,7 @@ class PostsRelationManager extends RelationManager
                     ->icon('heroicon-m-arrow-path')
                     ->color('warning')
                     ->requiresConfirmation()
-                    ->modalDescription('Исходное сообщение будет заново получено из Telegram, после чего загрузка медиа повторится.')
+                    ->modalDescription('Система повторно запросит исходное медиа подходящим для источника способом.')
                     ->visible(fn (SourcePost $record): bool => $record->mediaAssets->contains(
                         fn (MediaAsset $asset): bool => blank($asset->path) && $asset->failed_at !== null,
                     ))

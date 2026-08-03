@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 
 class TelegramMessagePayloadFactory
@@ -13,13 +13,13 @@ class TelegramMessagePayloadFactory
      */
     public function fromRawMessage(
         TelegramAccount $telegramAccount,
-        SourceChannel $sourceChannel,
+        Source $source,
         array $message,
     ): array {
         return [
             'telegram_account_uuid' => $telegramAccount->uuid,
             'event_type' => isset($message['edit_date']) ? 'edit' : 'message',
-            'peer_id' => $sourceChannel->telegram_peer_id,
+            'peer_id' => $source->telegram_peer_id,
             'message_id' => (int) $message['id'],
             'grouped_id' => isset($message['grouped_id']) ? (string) $message['grouped_id'] : null,
             'posted_at' => date(DATE_ATOM, (int) $message['date']),

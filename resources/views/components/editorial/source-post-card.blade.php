@@ -8,7 +8,7 @@
         <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
                 <h4 class="text-sm font-semibold text-gray-950 dark:text-white">
-                    {{ $sourcePost->sourceChannel->title }}
+                    {{ $sourcePost->source->title }}
                 </h4>
                 @if ($isPrimary)
                     <span class="rounded-full bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-500/10 dark:text-primary-300">
@@ -28,7 +28,7 @@
                 target="_blank"
                 rel="noopener noreferrer"
             >
-                Открыть в Telegram
+                Открыть источник
             </a>
         @endif
     </div>
@@ -56,7 +56,7 @@
                             <img
                                 class="h-full w-full object-cover"
                                 src="{{ $previewUrl }}"
-                                alt="{{ $isVideo ? 'Превью видео' : 'Фото' }} из источника {{ $sourcePost->sourceChannel->title }}"
+                                alt="{{ $isVideo ? 'Превью видео' : 'Фото' }} из источника {{ $sourcePost->source->title }}"
                                 loading="lazy"
                             >
                         @else
@@ -80,7 +80,8 @@
         </div>
     @endif
 
-    <dl class="mt-4 grid grid-cols-2 gap-2 border-t border-gray-200 pt-3 text-xs dark:border-white/10 sm:grid-cols-4">
+    @if ($sourcePost->source->isTelegram())
+        <dl class="mt-4 grid grid-cols-2 gap-2 border-t border-gray-200 pt-3 text-xs dark:border-white/10 sm:grid-cols-4">
         <div>
             <dt class="text-gray-500 dark:text-gray-400">Просмотры</dt>
             <dd class="mt-1 font-semibold tabular-nums text-gray-950 dark:text-white">{{ number_format($sourcePost->views, 0, ',', ' ') }}</dd>
@@ -97,5 +98,6 @@
             <dt class="text-gray-500 dark:text-gray-400">Комментарии</dt>
             <dd class="mt-1 font-semibold tabular-nums text-gray-950 dark:text-white">{{ number_format($sourcePost->comments, 0, ',', ' ') }}</dd>
         </div>
-    </dl>
+        </dl>
+    @endif
 </article>

@@ -9,7 +9,7 @@ use App\Filament\Resources\SourceChannels\Pages\CreateSourceChannel;
 use App\Filament\Resources\SourceChannels\Pages\EditSourceChannel;
 use App\Filament\Resources\SourceChannels\Pages\ListSourceChannels;
 use App\Jobs\VerifySourceChannelAccessJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\TelegramAccount;
 use App\Models\TelegramOwnerCommand;
@@ -54,19 +54,19 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->call('create')
             ->assertHasNoFormErrors();
 
-        $sourceChannel = SourceChannel::query()->where('username', 'trendi')->firstOrFail();
+        $source = Source::query()->where('username', 'trendi')->firstOrFail();
 
-        $this->assertTrue($sourceChannel->preferredCollectorTelegramAccount?->is($preferred));
+        $this->assertTrue($source->preferredCollectorTelegramAccount?->is($preferred));
         Queue::assertPushed(
             VerifySourceChannelAccessJob::class,
-            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $sourceChannel->id,
+            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceId === $source->id,
         );
     }
 
     public function test_duplicate_public_source_is_shown_as_a_form_error_after_username_normalization(): void
     {
         $user = User::factory()->create(['is_active' => true]);
-        SourceChannel::factory()->create(['username' => 'smotret_skachatt']);
+        Source::factory()->create(['username' => 'smotret_skachatt']);
 
         $this->actingAs($user);
 
@@ -81,13 +81,13 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->assertHasFormErrors(['username' => 'unique'])
             ->assertSee('Этот Telegram-канал уже добавлен в источники.');
 
-        $this->assertSame(1, SourceChannel::query()->count());
+        $this->assertSame(1, Source::query()->count());
     }
 
     public function test_duplicate_private_source_is_shown_as_a_form_error(): void
     {
         $user = User::factory()->create(['is_active' => true]);
-        SourceChannel::factory()->create([
+        Source::factory()->create([
             'username' => null,
             'telegram_peer_id' => -1001234567890,
         ]);
@@ -105,7 +105,7 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->assertHasFormErrors(['telegram_peer_id' => 'unique'])
             ->assertSee('Источник с таким Telegram peer ID уже добавлен.');
 
-        $this->assertSame(1, SourceChannel::query()->count());
+        $this->assertSame(1, Source::query()->count());
     }
 
     public function test_concurrent_duplicate_source_insert_is_converted_to_a_form_error(): void
@@ -113,12 +113,12 @@ class TelegramCollectorAssignmentTest extends TestCase
         $user = User::factory()->create(['is_active' => true]);
         $panel = Filament::getPanel('admin');
 
-        SourceChannel::creating(function (SourceChannel $sourceChannel): void {
-            if ($sourceChannel->username !== 'race_condition') {
+        Source::creating(function (Source $source): void {
+            if ($source->username !== 'race_condition') {
                 return;
             }
 
-            SourceChannel::withoutEvents(fn (): SourceChannel => SourceChannel::query()->create([
+            Source::withoutEvents(fn (): Source => Source::query()->create([
                 'username' => 'race_condition',
                 'title' => 'Источник из параллельного запроса',
                 'weight' => 1,
@@ -142,7 +142,7 @@ class TelegramCollectorAssignmentTest extends TestCase
                 ->assertHasFormErrors(['username'])
                 ->assertSee('Этот Telegram-канал уже добавлен в источники.');
 
-            $this->assertSame(0, SourceChannel::query()->count());
+            $this->assertSame(0, Source::query()->count());
         } finally {
             $panel->databaseTransactions(false);
         }
@@ -154,28 +154,28 @@ class TelegramCollectorAssignmentTest extends TestCase
         $user = User::factory()->create(['is_active' => true]);
         $first = TelegramAccount::factory()->create();
         $second = TelegramAccount::factory()->create();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'preferred_collector_telegram_account_id' => $first->id,
         ]);
 
         $this->actingAs($user);
 
-        Livewire::test(EditSourceChannel::class, ['record' => $sourceChannel->id])
+        Livewire::test(EditSourceChannel::class, ['record' => $source->id])
             ->fillForm(['preferred_collector_telegram_account_id' => $second->id])
             ->call('save')
             ->assertHasNoFormErrors();
 
-        $this->assertTrue($sourceChannel->fresh()->preferredCollectorTelegramAccount?->is($second));
+        $this->assertTrue($source->fresh()->preferredCollectorTelegramAccount?->is($second));
 
-        Livewire::test(EditSourceChannel::class, ['record' => $sourceChannel->id])
+        Livewire::test(EditSourceChannel::class, ['record' => $source->id])
             ->fillForm(['preferred_collector_telegram_account_id' => null])
             ->call('save')
             ->assertHasNoFormErrors();
 
-        $this->assertNull($sourceChannel->fresh()->preferred_collector_telegram_account_id);
+        $this->assertNull($source->fresh()->preferred_collector_telegram_account_id);
         Queue::assertPushed(
             VerifySourceChannelAccessJob::class,
-            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $sourceChannel->id,
+            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceId === $source->id,
         );
     }
 
@@ -183,34 +183,34 @@ class TelegramCollectorAssignmentTest extends TestCase
     {
         $preferred = $this->connectedAccount();
         $lessLoaded = $this->connectedAccount();
-        SourceChannel::factory()->create([
+        Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => $preferred->id,
         ]);
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => null,
             'preferred_collector_telegram_account_id' => $preferred->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach([
+        $source->telegramAccounts()->attach([
             $preferred->id => ['access_status' => TelegramSourceAccessStatus::Available],
             $lessLoaded->id => ['access_status' => TelegramSourceAccessStatus::Available],
         ]);
 
-        $selected = app(AssignTelegramCollector::class)->handle($sourceChannel);
+        $selected = app(AssignTelegramCollector::class)->handle($source);
 
         $this->assertTrue($selected?->is($preferred));
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($preferred));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($preferred));
     }
 
     public function test_public_source_is_joined_and_muted_before_collector_is_assigned(): void
     {
         $account = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'collector_telegram_account_id' => null,
         ]);
-        $sourceChannel->telegramAccounts()->attach($account->id, [
+        $source->telegramAccounts()->attach($account->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
         $client = Mockery::mock(MadelineClient::class);
@@ -218,46 +218,46 @@ class TelegramCollectorAssignmentTest extends TestCase
             ->once()
             ->with('@trendi')
             ->ordered()
-            ->andReturn($this->channelInfo($sourceChannel));
+            ->andReturn($this->channelInfo($source));
         $client->shouldReceive('joinChannel')
             ->once()
             ->with('@trendi')
             ->ordered()
-            ->andReturnUsing(function () use ($sourceChannel): void {
-                $this->assertNull($sourceChannel->fresh()->collector_telegram_account_id);
+            ->andReturnUsing(function () use ($source): void {
+                $this->assertNull($source->fresh()->collector_telegram_account_id);
             });
         $client->shouldReceive('muteNotifications')
             ->once()
             ->with('@trendi')
             ->ordered();
 
-        $this->executeVerification($account, $sourceChannel, $client);
+        $this->executeVerification($account, $source, $client);
 
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($account));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($account));
     }
 
     public function test_join_failure_marks_preferred_unavailable_and_uses_backup(): void
     {
         $preferred = $this->connectedAccount();
         $backup = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'collector_telegram_account_id' => null,
             'preferred_collector_telegram_account_id' => $preferred->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach([
+        $source->telegramAccounts()->attach([
             $preferred->id => ['access_status' => TelegramSourceAccessStatus::Available],
             $backup->id => ['access_status' => TelegramSourceAccessStatus::Available],
         ]);
         $preferredClient = Mockery::mock(MadelineClient::class);
         $preferredClient->shouldReceive('getInfo')
             ->once()
-            ->andReturn($this->channelInfo($sourceChannel));
+            ->andReturn($this->channelInfo($source));
         $preferredClient->shouldReceive('joinChannel')
             ->once()
             ->with('@trendi')
             ->andThrow(new RuntimeException('CHANNELS_TOO_MUCH'));
-        $command = $this->verificationCommand($preferred, $sourceChannel);
+        $command = $this->verificationCommand($preferred, $source);
         $exception = null;
 
         try {
@@ -267,17 +267,17 @@ class TelegramCollectorAssignmentTest extends TestCase
             app(TelegramOwnerCommandExecutor::class)->recordFailure($command, $caughtException);
         }
 
-        $selected = app(AssignTelegramCollector::class)->handle($sourceChannel->fresh());
+        $selected = app(AssignTelegramCollector::class)->handle($source->fresh());
 
-        $preferredAccess = $sourceChannel->telegramAccounts()
+        $preferredAccess = $source->telegramAccounts()
             ->whereKey($preferred->id)
             ->firstOrFail()
             ->pivot;
 
         $this->assertTrue($selected?->is($backup));
         $this->assertInstanceOf(RuntimeException::class, $exception);
-        $this->assertSame($preferred->id, $sourceChannel->fresh()->preferred_collector_telegram_account_id);
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($backup));
+        $this->assertSame($preferred->id, $source->fresh()->preferred_collector_telegram_account_id);
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($backup));
         $this->assertSame(TelegramSourceAccessStatus::Unavailable->value, $preferredAccess->access_status);
         $this->assertSame('CHANNELS_TOO_MUCH', $preferredAccess->last_error);
     }
@@ -285,11 +285,11 @@ class TelegramCollectorAssignmentTest extends TestCase
     public function test_already_participant_error_is_treated_as_success_and_notifications_are_muted(): void
     {
         $account = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create(['username' => 'trendi']);
+        $source = Source::factory()->create(['username' => 'trendi']);
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getInfo')
             ->once()
-            ->andReturn($this->channelInfo($sourceChannel));
+            ->andReturn($this->channelInfo($source));
         $client->shouldReceive('joinChannel')
             ->once()
             ->with('@trendi')
@@ -300,36 +300,36 @@ class TelegramCollectorAssignmentTest extends TestCase
             ));
         $client->shouldReceive('muteNotifications')->once()->with('@trendi');
 
-        $this->executeVerification($account, $sourceChannel, $client);
+        $this->executeVerification($account, $source, $client);
 
         $this->assertSame(
             TelegramSourceAccessStatus::Available->value,
-            $sourceChannel->telegramAccounts()->findOrFail($account->id)->pivot->access_status,
+            $source->telegramAccounts()->findOrFail($account->id)->pivot->access_status,
         );
     }
 
     public function test_private_source_does_not_attempt_to_join(): void
     {
         $account = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => null,
         ]);
-        $sourceChannel->telegramAccounts()->attach($account->id, [
+        $source->telegramAccounts()->attach($account->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getInfo')
             ->once()
-            ->with($sourceChannel->telegram_peer_id)
-            ->andReturn($this->channelInfo($sourceChannel));
+            ->with($source->telegram_peer_id)
+            ->andReturn($this->channelInfo($source));
         $client->shouldNotReceive('joinChannel');
         $client->shouldReceive('muteNotifications')
             ->once()
-            ->with($sourceChannel->telegram_peer_id);
+            ->with($source->telegram_peer_id);
 
-        $this->executeVerification($account, $sourceChannel, $client);
-        $selected = $sourceChannel->fresh()->collectorTelegramAccount;
+        $this->executeVerification($account, $source, $client);
+        $selected = $source->fresh()->collectorTelegramAccount;
 
         $this->assertTrue($selected?->is($account));
     }
@@ -338,26 +338,26 @@ class TelegramCollectorAssignmentTest extends TestCase
     {
         $preferred = $this->connectedAccount();
         $backup = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => $backup->id,
             'preferred_collector_telegram_account_id' => $preferred->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach([
+        $source->telegramAccounts()->attach([
             $preferred->id => ['access_status' => TelegramSourceAccessStatus::Unavailable],
             $backup->id => ['access_status' => TelegramSourceAccessStatus::Available],
         ]);
 
         $this->assertSame(0, app(ReconcileTelegramCollectors::class)->handle());
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($backup));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($backup));
 
-        $sourceChannel->telegramAccounts()->updateExistingPivot($preferred->id, [
+        $source->telegramAccounts()->updateExistingPivot($preferred->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
             'last_error' => null,
         ]);
 
         $this->assertSame(1, app(ReconcileTelegramCollectors::class)->handle());
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($preferred));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($preferred));
     }
 
     public function test_reconciliation_preserves_a_stale_collector_when_no_healthy_replacement_exists(): void
@@ -366,39 +366,39 @@ class TelegramCollectorAssignmentTest extends TestCase
             'status' => TelegramAccountStatus::Connected,
             'last_seen_at' => now()->subMinutes(4),
         ]);
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => $stale->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach($stale->id, [
+        $source->telegramAccounts()->attach($stale->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
 
         $this->assertSame(0, app(ReconcileTelegramCollectors::class)->handle());
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($stale));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($stale));
     }
 
     public function test_reconciliation_assigns_an_available_collector_without_calling_telegram(): void
     {
         $account = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'collector_telegram_account_id' => null,
         ]);
-        $sourceChannel->telegramAccounts()->attach($account->id, [
+        $source->telegramAccounts()->attach($account->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
         $reconciler = app(ReconcileTelegramCollectors::class);
 
         $this->assertSame(1, $reconciler->handle());
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($account));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($account));
     }
 
     public function test_reconciliation_stops_before_processing_the_next_source_when_requested(): void
     {
         $account = $this->connectedAccount();
-        $first = SourceChannel::factory()->create(['collector_telegram_account_id' => null]);
-        $second = SourceChannel::factory()->create(['collector_telegram_account_id' => null]);
+        $first = Source::factory()->create(['collector_telegram_account_id' => null]);
+        $second = Source::factory()->create(['collector_telegram_account_id' => null]);
         $first->telegramAccounts()->attach($account->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
@@ -423,12 +423,12 @@ class TelegramCollectorAssignmentTest extends TestCase
         Queue::fake();
         $preferred = $this->connectedAccount();
         $backup = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'collector_telegram_account_id' => $backup->id,
             'preferred_collector_telegram_account_id' => $preferred->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach([
+        $source->telegramAccounts()->attach([
             $preferred->id => [
                 'access_status' => TelegramSourceAccessStatus::Unavailable,
                 'last_checked_at' => now()->subMinutes(6),
@@ -441,33 +441,33 @@ class TelegramCollectorAssignmentTest extends TestCase
             ],
         ]);
         $this->assertSame(0, app(ReconcileTelegramCollectors::class)->handle());
-        $this->assertTrue($sourceChannel->fresh()->collectorTelegramAccount?->is($backup));
+        $this->assertTrue($source->fresh()->collectorTelegramAccount?->is($backup));
         Queue::assertPushedOn(
             'telegram',
             VerifySourceChannelAccessJob::class,
-            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceChannelId === $sourceChannel->id,
+            fn (VerifySourceChannelAccessJob $job): bool => $job->sourceId === $source->id,
         );
     }
 
     public function test_verification_mode_rejoins_an_existing_public_collector(): void
     {
         $account = $this->connectedAccount();
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach($account->id, [
+        $source->telegramAccounts()->attach($account->id, [
             'access_status' => TelegramSourceAccessStatus::Available,
         ]);
         $client = Mockery::mock(MadelineClient::class);
         $client->shouldReceive('getInfo')
             ->once()
-            ->andReturn($this->channelInfo($sourceChannel));
+            ->andReturn($this->channelInfo($source));
         $client->shouldReceive('joinChannel')->once()->with('@trendi');
         $client->shouldReceive('muteNotifications')->once()->with('@trendi');
 
-        $this->executeVerification($account, $sourceChannel, $client);
-        $selected = $sourceChannel->fresh()->collectorTelegramAccount;
+        $this->executeVerification($account, $source, $client);
+        $selected = $source->fresh()->collectorTelegramAccount;
 
         $this->assertTrue($selected?->is($account));
     }
@@ -477,12 +477,12 @@ class TelegramCollectorAssignmentTest extends TestCase
         $user = User::factory()->create(['is_active' => true]);
         $preferred = $this->connectedAccount(['name' => 'Основной']);
         $backup = $this->connectedAccount(['name' => 'Резерв']);
-        $sourceChannel = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'trendi',
             'preferred_collector_telegram_account_id' => $preferred->id,
             'collector_telegram_account_id' => $backup->id,
         ]);
-        $sourceChannel->telegramAccounts()->attach([
+        $source->telegramAccounts()->attach([
             $preferred->id => [
                 'access_status' => TelegramSourceAccessStatus::Unavailable,
                 'last_error' => 'CHANNELS_TOO_MUCH',
@@ -496,9 +496,9 @@ class TelegramCollectorAssignmentTest extends TestCase
         $this->actingAs($user);
 
         Livewire::test(ListSourceChannels::class)
-            ->assertCanSeeTableRecords([$sourceChannel])
-            ->assertTableColumnHasDescription('title', '@trendi', $sourceChannel)
-            ->assertTableColumnFormattedStateSet('collector', 'Резервный', $sourceChannel)
+            ->assertCanSeeTableRecords([$source])
+            ->assertTableColumnHasDescription('title', '@trendi', $source)
+            ->assertTableColumnFormattedStateSet('collector', 'Резервный', $source)
             ->assertTableColumnExists(
                 'statistics',
                 checkColumnUsing: fn (Column $column): bool => $column instanceof ViewColumn
@@ -518,7 +518,7 @@ class TelegramCollectorAssignmentTest extends TestCase
 
     public function test_source_statistics_column_shows_an_icon_and_number_for_each_metric(): void
     {
-        $sourceChannel = SourceChannel::factory()->make()->forceFill([
+        $source = Source::factory()->make()->forceFill([
             'posts_last_day_count' => 12,
             'views_last_day' => 1_592,
             'reactions_last_day' => 347,
@@ -527,7 +527,7 @@ class TelegramCollectorAssignmentTest extends TestCase
         ]);
 
         $html = view('filament.tables.columns.source-channel-statistics', [
-            'record' => $sourceChannel,
+            'record' => $source,
         ])->render();
 
         $statistics = [
@@ -557,9 +557,9 @@ class TelegramCollectorAssignmentTest extends TestCase
         $firstGroup = SourceGroup::factory()->create(['name' => 'Город']);
         $secondGroup = SourceGroup::factory()->create(['name' => 'Культура']);
         $otherGroup = SourceGroup::factory()->create(['name' => 'Спорт']);
-        $firstMatch = SourceChannel::factory()->create(['title' => 'Городской источник']);
-        $secondMatch = SourceChannel::factory()->create(['title' => 'Культурный источник']);
-        $excluded = SourceChannel::factory()->create(['title' => 'Спортивный источник']);
+        $firstMatch = Source::factory()->create(['title' => 'Городской источник']);
+        $secondMatch = Source::factory()->create(['title' => 'Культурный источник']);
+        $excluded = Source::factory()->create(['title' => 'Спортивный источник']);
 
         $firstMatch->sourceGroups()->attach($firstGroup);
         $secondMatch->sourceGroups()->attach($secondGroup);
@@ -578,34 +578,34 @@ class TelegramCollectorAssignmentTest extends TestCase
 
     private function executeVerification(
         TelegramAccount $account,
-        SourceChannel $sourceChannel,
+        Source $source,
         MadelineClient $client,
     ): void {
         app(TelegramOwnerCommandExecutor::class)->execute(
-            $this->verificationCommand($account, $sourceChannel),
+            $this->verificationCommand($account, $source),
             $client,
         );
     }
 
     private function verificationCommand(
         TelegramAccount $account,
-        SourceChannel $sourceChannel,
+        Source $source,
     ): TelegramOwnerCommand {
         return new TelegramOwnerCommand([
             'telegram_account_id' => $account->id,
             'type' => TelegramOwnerCommandType::VerifySource,
-            'payload' => ['source_channel_id' => $sourceChannel->id],
+            'payload' => ['source_id' => $source->id],
         ]);
     }
 
     /** @return array<string, mixed> */
-    private function channelInfo(SourceChannel $sourceChannel): array
+    private function channelInfo(Source $source): array
     {
         return [
-            'bot_api_id' => $sourceChannel->telegram_peer_id,
+            'bot_api_id' => $source->telegram_peer_id,
             'Chat' => array_filter([
-                'username' => $sourceChannel->username,
-                'title' => $sourceChannel->title,
+                'username' => $source->username,
+                'title' => $source->title,
             ]),
         ];
     }

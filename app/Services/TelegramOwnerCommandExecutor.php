@@ -8,7 +8,7 @@ use App\Actions\IngestTelegramUpdate;
 use App\Actions\RequestTelegramSourceHistorySync;
 use App\Contracts\MadelineClient;
 use App\Exceptions\TelegramApiServerException;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramOwnerCommand;
 use App\TelegramOwnerCommandType;
 use App\TelegramSourceAccessStatus;
@@ -60,11 +60,11 @@ class TelegramOwnerCommandExecutor
         }
 
         if ($command->type === TelegramOwnerCommandType::VerifySource) {
-            $sourceChannel = SourceChannel::query()->find(
-                (int) ($command->payload['source_channel_id'] ?? 0),
+            $source = Source::query()->find(
+                (int) ($command->payload['source_id'] ?? 0),
             );
 
-            $sourceChannel?->telegramAccounts()->syncWithoutDetaching([
+            $source?->telegramAccounts()->syncWithoutDetaching([
                 $command->telegram_account_id => [
                     'access_status' => TelegramSourceAccessStatus::Unavailable->value,
                     'last_checked_at' => now(),
@@ -74,13 +74,13 @@ class TelegramOwnerCommandExecutor
         }
 
         if ($command->type === TelegramOwnerCommandType::SyncSourceHistory) {
-            $sourceChannel = SourceChannel::query()->find(
-                (int) ($command->payload['source_channel_id'] ?? 0),
+            $source = Source::query()->find(
+                (int) ($command->payload['source_id'] ?? 0),
             );
 
-            if ($sourceChannel !== null) {
-                $metadata = is_array($sourceChannel->metadata) ? $sourceChannel->metadata : [];
-                $sourceChannel->update([
+            if ($source !== null) {
+                $metadata = is_array($source->metadata) ? $source->metadata : [];
+                $source->update([
                     'metadata' => array_merge($metadata, [
                         'statistics_sync' => [
                             'failed_at' => now()->toIso8601String(),
@@ -97,10 +97,10 @@ class TelegramOwnerCommandExecutor
         TelegramOwnerCommand $command,
         MadelineClient $client,
     ): array {
-        $sourceChannel = SourceChannel::query()->findOrFail(
-            (int) ($command->payload['source_channel_id'] ?? 0),
+        $source = Source::query()->findOrFail(
+            (int) ($command->payload['source_id'] ?? 0),
         );
-        $info = $client->getInfo($sourceChannel->telegramReference());
+        $info = $client->getInfo($source->telegramReference());
 
         if (! is_array($info)) {
             throw new RuntimeException('MadelineProto не вернул полную информацию об источнике.');
@@ -108,10 +108,10 @@ class TelegramOwnerCommandExecutor
 
         $normalized = $this->normalizedPeer($info);
         $peer = $normalized['username'] === null
-            ? ($normalized['peer_id'] ?? $sourceChannel->telegramReference())
+            ? ($normalized['peer_id'] ?? $source->telegramReference())
             : '@'.$normalized['username'];
 
-        if ($normalized['username'] !== null || filled($sourceChannel->username)) {
+        if ($normalized['username'] !== null || filled($source->username)) {
             try {
                 $client->joinChannel($peer);
             } catch (Throwable $exception) {
@@ -122,22 +122,22 @@ class TelegramOwnerCommandExecutor
         }
 
         $client->muteNotifications($peer);
-        $sourceChannel->telegramAccounts()->syncWithoutDetaching([
+        $source->telegramAccounts()->syncWithoutDetaching([
             $command->telegram_account_id => [
                 'access_status' => TelegramSourceAccessStatus::Available->value,
                 'last_checked_at' => now(),
                 'last_error' => null,
             ],
         ]);
-        $sourceChannel->update(array_filter([
+        $source->update(array_filter([
             'telegram_peer_id' => $normalized['peer_id'],
             'username' => $normalized['username'],
             'title' => $normalized['title'],
         ], static fn (mixed $value): bool => filled($value)));
-        $assignedAccount = $this->assignTelegramCollector->handle($sourceChannel->fresh());
+        $assignedAccount = $this->assignTelegramCollector->handle($source->fresh());
 
         if ($assignedAccount?->id === $command->telegram_account_id) {
-            $this->requestHistorySync->handle($sourceChannel->fresh(), 24);
+            $this->requestHistorySync->handle($source->fresh(), 24);
         }
 
         return array_filter($normalized, static fn (mixed $value): bool => $value !== null);
@@ -148,11 +148,11 @@ class TelegramOwnerCommandExecutor
         TelegramOwnerCommand $command,
         MadelineClient $client,
     ): array {
-        $sourceChannel = SourceChannel::query()
+        $source = Source::query()
             ->with('collectorTelegramAccount')
             ->where('is_active', true)
-            ->findOrFail((int) ($command->payload['source_channel_id'] ?? 0));
-        $telegramAccount = $sourceChannel->collectorTelegramAccount;
+            ->findOrFail((int) ($command->payload['source_id'] ?? 0));
+        $telegramAccount = $source->collectorTelegramAccount;
 
         if ($telegramAccount === null || $telegramAccount->id !== $command->telegram_account_id) {
             throw new RuntimeException('Команда синхронизации назначена не текущему Telegram-аккаунту источника.');
@@ -165,7 +165,7 @@ class TelegramOwnerCommandExecutor
 
         for ($page = 0; $page < 50; $page++) {
             $history = $client->getHistory(
-                $sourceChannel->telegramReference(),
+                $source->telegramReference(),
                 $offsetId,
                 100,
             );
@@ -194,7 +194,7 @@ class TelegramOwnerCommandExecutor
                 $this->ingestTelegramUpdate->handle(
                     $this->payloadFactory->fromRawMessage(
                         $telegramAccount,
-                        $sourceChannel,
+                        $source,
                         $message,
                     ),
                 );
@@ -213,8 +213,8 @@ class TelegramOwnerCommandExecutor
             $offsetId = $nextOffsetId;
         }
 
-        $metadata = is_array($sourceChannel->metadata) ? $sourceChannel->metadata : [];
-        $sourceChannel->update([
+        $metadata = is_array($source->metadata) ? $source->metadata : [];
+        $source->update([
             'last_backfilled_at' => now(),
             'metadata' => array_merge($metadata, [
                 'statistics_sync' => [

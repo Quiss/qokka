@@ -9,7 +9,7 @@ use App\Jobs\SyncSourceChannelStatisticsJob;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
@@ -39,7 +39,7 @@ class SourceStatisticsTest extends TestCase
     public function test_raw_telegram_metrics_include_reaction_breakdown(): void
     {
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
 
         $payload = app(TelegramMessagePayloadFactory::class)->fromRawMessage(
             $account,
@@ -69,7 +69,7 @@ class SourceStatisticsTest extends TestCase
     public function test_partial_metric_updates_preserve_post_content_and_other_counters(): void
     {
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -91,14 +91,14 @@ class SourceStatisticsTest extends TestCase
         $this->assertSame(5, $post->forwards);
         $this->assertSame(12, $post->reactions);
         $this->assertSame(3, $post->comments);
-        $this->assertSame($channel->id, $post->source_channel_id);
+        $this->assertSame($channel->id, $post->source_id);
     }
 
     public function test_source_statistics_only_aggregate_active_posts_from_last_day(): void
     {
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
             'views' => 100,
             'forwards' => 4,
@@ -106,7 +106,7 @@ class SourceStatisticsTest extends TestCase
             'comments' => 2,
         ]);
         SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHours(3),
             'views' => 250,
             'forwards' => 7,
@@ -114,7 +114,7 @@ class SourceStatisticsTest extends TestCase
             'comments' => 5,
         ]);
         SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subDays(2),
             'views' => 9999,
             'forwards' => 9999,
@@ -122,7 +122,7 @@ class SourceStatisticsTest extends TestCase
             'comments' => 9999,
         ]);
 
-        $statistics = SourceChannel::query()->withLastDayStatistics()->findOrFail($channel->id);
+        $statistics = Source::query()->withLastDayStatistics()->findOrFail($channel->id);
 
         $this->assertSame(2, $statistics->posts_last_day_count);
         $this->assertSame(350, $statistics->views_last_day);
@@ -135,9 +135,9 @@ class SourceStatisticsTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $assigned = SourceChannel::factory()->create(['collector_telegram_account_id' => $account->id]);
-        SourceChannel::factory()->create();
-        SourceChannel::factory()->create([
+        $assigned = Source::factory()->create(['collector_telegram_account_id' => $account->id]);
+        Source::factory()->create();
+        Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
             'is_active' => false,
         ]);
@@ -146,7 +146,7 @@ class SourceStatisticsTest extends TestCase
 
         Queue::assertPushed(
             SyncSourceChannelStatisticsJob::class,
-            fn (SyncSourceChannelStatisticsJob $job): bool => $job->sourceChannelId === $assigned->id
+            fn (SyncSourceChannelStatisticsJob $job): bool => $job->sourceId === $assigned->id
                 && $job->lookbackHours === 48,
         );
         Queue::assertPushed(SyncSourceChannelStatisticsJob::class, 1);
@@ -155,7 +155,7 @@ class SourceStatisticsTest extends TestCase
     public function test_history_is_fetched_and_ingested_by_the_madeline_owner_executor(): void
     {
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -178,7 +178,7 @@ class SourceStatisticsTest extends TestCase
             'telegram_account_id' => $account->id,
             'type' => TelegramOwnerCommandType::SyncSourceHistory,
             'payload' => [
-                'source_channel_id' => $channel->id,
+                'source_id' => $channel->id,
                 'lookback_hours' => 24,
             ],
         ]);
@@ -187,7 +187,7 @@ class SourceStatisticsTest extends TestCase
 
         $this->assertSame(['messages' => 1, 'lookback_hours' => 24], $result);
         $this->assertDatabaseHas('source_posts', [
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Историческая новость',
         ]);
         $this->assertNotNull($channel->fresh()->last_backfilled_at);
@@ -199,17 +199,17 @@ class SourceStatisticsTest extends TestCase
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
             'last_event_at' => now(),
             'last_backfilled_at' => now(),
             'metadata' => ['statistics_sync' => ['messages' => 10], 'keep' => true],
         ]);
-        $group->sourceChannels()->attach($channel);
-        $post = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $group->sources()->attach($channel);
+        $post = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = SourceMessage::factory()->create([
             'source_post_id' => $post->id,
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
         ]);
         $asset = MediaAsset::factory()->for($post, 'mediable')->create([
             'source_message_id' => $message->id,
@@ -234,8 +234,8 @@ class SourceStatisticsTest extends TestCase
         $this->assertModelExists($group);
         $this->assertModelExists($account);
         $this->assertModelExists($candidate);
-        $this->assertDatabaseHas('source_channel_source_group', [
-            'source_channel_id' => $channel->id,
+        $this->assertDatabaseHas('source_group_source', [
+            'source_id' => $channel->id,
             'source_group_id' => $group->id,
         ]);
         $this->assertDatabaseMissing('source_posts', ['id' => $post->id]);
@@ -252,7 +252,7 @@ class SourceStatisticsTest extends TestCase
         $this->assertArrayNotHasKey('statistics_sync', $channel->fresh()->metadata);
         Queue::assertPushed(
             SyncSourceChannelStatisticsJob::class,
-            fn (SyncSourceChannelStatisticsJob $job): bool => $job->sourceChannelId === $channel->id
+            fn (SyncSourceChannelStatisticsJob $job): bool => $job->sourceId === $channel->id
                 && $job->lookbackHours === 48,
         );
     }
@@ -260,8 +260,8 @@ class SourceStatisticsTest extends TestCase
     public function test_purge_keeps_a_media_file_that_is_still_used_by_a_planned_post(): void
     {
         Storage::fake('local');
-        $channel = SourceChannel::factory()->create();
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $channel = Source::factory()->create();
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
             'path' => 'telegram/shared.jpg',
         ]);

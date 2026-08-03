@@ -2,7 +2,7 @@
 
 namespace Database\Factories;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourcePost;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
@@ -20,7 +20,7 @@ class SourcePostFactory extends Factory
     public function definition(): array
     {
         return [
-            'source_channel_id' => SourceChannel::factory(),
+            'source_id' => Source::factory(),
             'canonical_key' => (string) Str::uuid(),
             'text' => fake()->paragraphs(2, true),
             'normalized_text' => fake()->sentence(),

@@ -22,8 +22,8 @@ class RequestTelegramMediaDownload
         $origin = $mediaAsset->originMediaAsset ?? $mediaAsset;
         $origin->loadMissing(
             'sourceMessage.telegramAccount',
-            'sourceMessage.sourceChannel.collectorTelegramAccount',
-            'sourceMessage.sourceChannel.telegramAccounts',
+            'sourceMessage.source.collectorTelegramAccount',
+            'sourceMessage.source.telegramAccounts',
         );
         $sourceMessage = $origin->sourceMessage;
 

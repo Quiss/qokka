@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 /**
  * @property int $id
  * @property int $source_post_id
- * @property int $source_channel_id
+ * @property int $source_id
  * @property int|null $telegram_account_id
  * @property int $external_message_id
  * @property string|null $text
@@ -28,7 +28,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
  * @property-read TelegramAccount|null $telegramAccount
  * @property-read Collection<int, MediaAsset> $sourceMediaAssets
  */
-#[Fillable(['source_post_id', 'source_channel_id', 'telegram_account_id', 'external_message_id', 'telegram_grouped_id', 'text', 'entities', 'metrics', 'views', 'forwards', 'reactions', 'comments', 'raw_payload', 'posted_at', 'edited_at', 'deleted_at'])]
+#[Fillable(['source_post_id', 'source_id', 'telegram_account_id', 'external_message_id', 'telegram_grouped_id', 'text', 'entities', 'metrics', 'views', 'forwards', 'reactions', 'comments', 'raw_payload', 'posted_at', 'edited_at', 'deleted_at'])]
 class SourceMessage extends Model
 {
     /** @use HasFactory<SourceMessageFactory> */
@@ -40,10 +40,10 @@ class SourceMessage extends Model
         return $this->belongsTo(SourcePost::class);
     }
 
-    /** @return BelongsTo<SourceChannel, $this> */
-    public function sourceChannel(): BelongsTo
+    /** @return BelongsTo<Source, $this> */
+    public function source(): BelongsTo
     {
-        return $this->belongsTo(SourceChannel::class);
+        return $this->belongsTo(Source::class);
     }
 
     /** @return BelongsTo<TelegramAccount, $this> */

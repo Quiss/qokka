@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Actions\RequestTelegramSourceHistorySync;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -17,28 +17,28 @@ class SyncSourceChannelStatisticsJob implements ShouldBeUnique, ShouldQueue
     public int $tries = 1;
 
     public function __construct(
-        public readonly int $sourceChannelId,
+        public readonly int $sourceId,
         public readonly int $lookbackHours = 24,
     ) {}
 
     public function uniqueId(): string
     {
-        return $this->sourceChannelId.':'.$this->lookbackHours;
+        return $this->sourceId.':'.$this->lookbackHours;
     }
 
     public function handle(RequestTelegramSourceHistorySync $requestHistorySync): void
     {
-        $sourceChannel = SourceChannel::query()->find($this->sourceChannelId);
+        $source = Source::query()->find($this->sourceId);
 
-        if ($sourceChannel !== null) {
-            $requestHistorySync->handle($sourceChannel, $this->lookbackHours);
+        if ($source !== null) {
+            $requestHistorySync->handle($source, $this->lookbackHours);
         }
     }
 
     public function failed(?Throwable $exception): void
     {
         Log::error('Telegram source history request failed.', [
-            'source_channel_id' => $this->sourceChannelId,
+            'source_id' => $this->sourceId,
             'lookback_hours' => $this->lookbackHours,
             'error' => $exception?->getMessage(),
         ]);

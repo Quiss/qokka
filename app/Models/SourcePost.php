@@ -15,7 +15,7 @@ use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
- * @property int $source_channel_id
+ * @property int $source_id
  * @property string $canonical_key
  * @property string|null $text
  * @property array<string, mixed>|null $metrics
@@ -26,11 +26,11 @@ use Illuminate\Support\Carbon;
  * @property int $comments
  * @property Carbon $posted_at
  * @property Carbon|null $edited_at
- * @property-read SourceChannel $sourceChannel
+ * @property-read Source $source
  * @property-read Collection<int, SourceMessage> $messages
  * @property-read Collection<int, MediaAsset> $mediaAssets
  */
-#[Fillable(['source_channel_id', 'canonical_key', 'telegram_grouped_id', 'text', 'normalized_text', 'source_url', 'metrics', 'views', 'forwards', 'reactions', 'comments', 'metadata', 'status', 'posted_at', 'edited_at', 'deleted_at'])]
+#[Fillable(['source_id', 'canonical_key', 'telegram_grouped_id', 'text', 'normalized_text', 'source_url', 'metrics', 'views', 'forwards', 'reactions', 'comments', 'metadata', 'status', 'posted_at', 'edited_at', 'deleted_at'])]
 class SourcePost extends Model
 {
     /** @use HasFactory<SourcePostFactory> */
@@ -38,10 +38,10 @@ class SourcePost extends Model
 
     protected $attributes = ['status' => 'active'];
 
-    /** @return BelongsTo<SourceChannel, $this> */
-    public function sourceChannel(): BelongsTo
+    /** @return BelongsTo<Source, $this> */
+    public function source(): BelongsTo
     {
-        return $this->belongsTo(SourceChannel::class);
+        return $this->belongsTo(Source::class);
     }
 
     /** @return HasMany<SourceMessage, $this> */
@@ -60,6 +60,19 @@ class SourcePost extends Model
     public function storyCandidates(): BelongsToMany
     {
         return $this->belongsToMany(StoryCandidate::class)->withPivot('is_primary');
+    }
+
+    public function isCollection(): bool
+    {
+        return data_get($this->metadata, 'content_kind') === 'collection';
+    }
+
+    /** @return array<string, mixed>|null */
+    public function collectionPayload(): ?array
+    {
+        $collection = data_get($this->metadata, 'collection');
+
+        return is_array($collection) ? $collection : null;
     }
 
     protected function casts(): array

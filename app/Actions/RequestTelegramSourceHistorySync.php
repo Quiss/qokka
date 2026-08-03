@@ -2,7 +2,7 @@
 
 namespace App\Actions;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramOwnerCommand;
 use App\Services\TelegramOwnerCommandDispatcher;
 use App\TelegramOwnerCommandType;
@@ -13,10 +13,14 @@ class RequestTelegramSourceHistorySync
         private readonly TelegramOwnerCommandDispatcher $commandDispatcher,
     ) {}
 
-    public function handle(SourceChannel $sourceChannel, int $lookbackHours = 24): ?TelegramOwnerCommand
+    public function handle(Source $source, int $lookbackHours = 24): ?TelegramOwnerCommand
     {
-        $sourceChannel->loadMissing('collectorTelegramAccount');
-        $account = $sourceChannel->collectorTelegramAccount;
+        if (! $source->isTelegram()) {
+            return null;
+        }
+
+        $source->loadMissing('collectorTelegramAccount');
+        $account = $source->collectorTelegramAccount;
 
         if ($account === null || ! $account->is_active) {
             return null;
@@ -26,10 +30,10 @@ class RequestTelegramSourceHistorySync
             $account,
             TelegramOwnerCommandType::SyncSourceHistory,
             [
-                'source_channel_id' => $sourceChannel->id,
+                'source_id' => $source->id,
                 'lookback_hours' => max(1, min(168, $lookbackHours)),
             ],
-            "source:{$sourceChannel->id}:history:".max(1, min(168, $lookbackHours)),
+            "source:{$source->id}:history:".max(1, min(168, $lookbackHours)),
             priority: 10,
         );
     }

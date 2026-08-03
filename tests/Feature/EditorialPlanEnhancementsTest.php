@@ -27,7 +27,7 @@ use App\Models\Delivery;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
@@ -206,19 +206,19 @@ class EditorialPlanEnhancementsTest extends TestCase
     public function test_replenishment_excludes_seen_posts_and_marks_candidates_older_than_one_day(): void
     {
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create(['source_group_id' => $group->id]);
         $plan = ContentPlan::factory()->create([
             'publication_id' => $publication->id,
             'status' => ContentPlanStatus::NeedsCandidates,
         ]);
         $seenPost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $oldPost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHours(30),
         ]);
         $seenCandidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
@@ -377,7 +377,7 @@ class EditorialPlanEnhancementsTest extends TestCase
             'record' => $plannedPost->load([
                 'mediaAssets',
                 'revisions.requestedBy',
-                'storyCandidate.sourcePosts.sourceChannel',
+                'storyCandidate.sourcePosts.source',
                 'storyCandidate.sourcePosts.mediaAssets',
             ]),
         ])
@@ -507,12 +507,12 @@ class EditorialPlanEnhancementsTest extends TestCase
             'status' => CandidateStatus::Selected,
         ]);
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $sourceMessage = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'telegram_account_id' => $account->id,
             'external_message_id' => 101,
             'entities' => [],
@@ -612,9 +612,9 @@ class EditorialPlanEnhancementsTest extends TestCase
     public function test_source_posts_table_exposes_downloaded_media_and_post_details(): void
     {
         $user = User::factory()->create(['is_active' => true]);
-        $channel = SourceChannel::factory()->create(['title' => 'Новости Петербурга']);
+        $channel = Source::factory()->create(['title' => 'Новости Петербурга']);
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Пост с фотографией из Telegram',
             'views' => 15_200,
             'reactions' => 430,
@@ -635,7 +635,7 @@ class EditorialPlanEnhancementsTest extends TestCase
             ->assertActionMounted(TestAction::make('open')->table($sourcePost));
 
         $this->view('filament.source-channels.source-post-details', [
-            'record' => $sourcePost->load(['sourceChannel', 'mediaAssets']),
+            'record' => $sourcePost->load(['source', 'mediaAssets']),
         ])
             ->assertSee('Новости Петербурга')
             ->assertSee('Пост с фотографией из Telegram')
@@ -648,15 +648,15 @@ class EditorialPlanEnhancementsTest extends TestCase
         Queue::fake();
         $user = User::factory()->create(['is_active' => true]);
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
         ]);
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $sourceMessage = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'telegram_account_id' => $account->id,
             'external_message_id' => 102,
             'entities' => [],
@@ -729,7 +729,7 @@ class EditorialPlanEnhancementsTest extends TestCase
 
         $this->view('filament.content-plans.story-candidate-details', [
             'record' => $candidate->load([
-                'sourcePosts.sourceChannel',
+                'sourcePosts.source',
                 'sourcePosts.mediaAssets',
             ]),
         ])

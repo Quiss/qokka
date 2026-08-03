@@ -3,8 +3,9 @@
 namespace App\Services;
 
 use App\Jobs\IngestTelegramUpdateJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
+use App\SourceType;
 use App\TelegramAccountStatus;
 
 class TelegramApiServerUpdateHandler
@@ -72,15 +73,15 @@ class TelegramApiServerUpdateHandler
         }
 
         $peerId = $this->messagePeerId($message);
-        $sourceChannel = $this->sourceChannel($telegramAccount, $peerId);
+        $source = $this->source($telegramAccount, $peerId);
 
-        if ($sourceChannel === null) {
+        if ($source === null) {
             return;
         }
 
         $payload = $this->payloadFactory->fromRawMessage(
             $telegramAccount,
-            $sourceChannel,
+            $source,
             $message,
         );
         $payload['event_type'] = $eventType;
@@ -93,7 +94,7 @@ class TelegramApiServerUpdateHandler
     {
         $peerId = $this->channelPeerId($update['channel_id'] ?? null);
 
-        if ($this->sourceChannel($telegramAccount, $peerId) === null) {
+        if ($this->source($telegramAccount, $peerId) === null) {
             return;
         }
 
@@ -123,7 +124,7 @@ class TelegramApiServerUpdateHandler
         $peerId = $this->channelPeerId($update['channel_id'] ?? null);
 
         if (
-            $this->sourceChannel($telegramAccount, $peerId) === null
+            $this->source($telegramAccount, $peerId) === null
             || ! is_numeric($update['id'] ?? null)
             || ! is_numeric($update[$metric] ?? null)
         ) {
@@ -140,15 +141,16 @@ class TelegramApiServerUpdateHandler
         ])->onQueue('ingest');
     }
 
-    private function sourceChannel(
+    private function source(
         TelegramAccount $telegramAccount,
         ?int $peerId,
-    ): ?SourceChannel {
+    ): ?Source {
         if ($peerId === null) {
             return null;
         }
 
-        return SourceChannel::query()
+        return Source::query()
+            ->where('type', SourceType::Telegram)
             ->where('is_active', true)
             ->whereBelongsTo($telegramAccount, 'collectorTelegramAccount')
             ->where('telegram_peer_id', $peerId)

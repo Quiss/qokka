@@ -9,7 +9,7 @@ use App\Models\Destination;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
@@ -34,12 +34,12 @@ class ContentStoragePruningTest extends TestCase
             'plan_date' => now()->subDays(15)->toDateString(),
         ]);
 
-        $oldSourcePost = SourcePost::factory()->for(SourceChannel::factory())->create([
+        $oldSourcePost = SourcePost::factory()->for(Source::factory())->create([
             'posted_at' => now()->subDays(14)->subSecond(),
         ]);
         $oldSourceMessage = SourceMessage::factory()->create([
             'source_post_id' => $oldSourcePost->id,
-            'source_channel_id' => $oldSourcePost->source_channel_id,
+            'source_id' => $oldSourcePost->source_id,
         ]);
         $oldSourceAsset = MediaAsset::factory()->for($oldSourcePost, 'mediable')->create([
             'source_message_id' => $oldSourceMessage->id,

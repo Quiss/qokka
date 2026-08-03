@@ -3,7 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Jobs\SyncSourceChannelStatisticsJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
+use App\SourceType;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -17,7 +18,8 @@ class SyncSourceStatisticsCommand extends Command
      */
     public function handle(): int
     {
-        $query = SourceChannel::query()
+        $query = Source::query()
+            ->where('type', SourceType::Telegram)
             ->where('is_active', true)
             ->whereNotNull('collector_telegram_account_id')
             ->orderBy('id');
@@ -35,8 +37,8 @@ class SyncSourceStatisticsCommand extends Command
         }
 
         $count = 0;
-        $query->each(function (SourceChannel $sourceChannel) use (&$count, $hours): void {
-            SyncSourceChannelStatisticsJob::dispatch($sourceChannel->id, $hours)
+        $query->each(function (Source $source) use (&$count, $hours): void {
+            SyncSourceChannelStatisticsJob::dispatch($source->id, $hours)
                 ->onQueue('telegram')
                 ->delay(now()->addSeconds($count * 3));
             $count++;

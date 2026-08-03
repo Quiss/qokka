@@ -3,7 +3,7 @@
 namespace App\Jobs;
 
 use App\Actions\RequestTelegramSourceVerification;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -19,24 +19,24 @@ class VerifySourceChannelAccessJob implements ShouldBeUnique, ShouldQueue
     /** @var list<int> */
     public array $backoff = [30, 120, 300];
 
-    public function __construct(public readonly int $sourceChannelId) {}
+    public function __construct(public readonly int $sourceId) {}
 
     public function uniqueId(): string
     {
-        return (string) $this->sourceChannelId;
+        return (string) $this->sourceId;
     }
 
     public function handle(RequestTelegramSourceVerification $requestVerification): void
     {
         $requestVerification->handle(
-            SourceChannel::query()->findOrFail($this->sourceChannelId),
+            Source::query()->findOrFail($this->sourceId),
         );
     }
 
     public function failed(?Throwable $exception): void
     {
         Log::error('Telegram source verification failed.', [
-            'source_channel_id' => $this->sourceChannelId,
+            'source_id' => $this->sourceId,
             'error' => $exception?->getMessage(),
         ]);
     }

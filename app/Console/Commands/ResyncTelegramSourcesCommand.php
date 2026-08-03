@@ -4,8 +4,9 @@ namespace App\Console\Commands;
 
 use App\Actions\PurgeSourceChannelContent;
 use App\Jobs\SyncSourceChannelStatisticsJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourcePost;
+use App\SourceType;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -31,7 +32,9 @@ class ResyncTelegramSourcesCommand extends Command
             return self::FAILURE;
         }
 
-        $query = SourceChannel::query()->orderBy('id');
+        $query = Source::query()
+            ->where('type', SourceType::Telegram)
+            ->orderBy('id');
         $sourceId = $this->option('source');
 
         if (filled($sourceId)) {
@@ -47,7 +50,7 @@ class ResyncTelegramSourcesCommand extends Command
         }
 
         $postIds = SourcePost::query()
-            ->whereIn('source_channel_id', $sources->modelKeys())
+            ->whereIn('source_id', $sources->modelKeys())
             ->select('id');
         $postCount = (clone $postIds)->count();
         $candidateLinkCount = DB::table('source_post_story_candidate')

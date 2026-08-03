@@ -73,7 +73,7 @@ class RequestMissingTelegramMedia
                     });
                 }
             })
-            ->with('sourceMessage.telegramAccount', 'sourceMessage.sourceChannel.telegramAccounts')
+            ->with('sourceMessage.telegramAccount', 'sourceMessage.source.telegramAccounts')
             ->orderBy('id');
         $limit = max(0, $limit);
 

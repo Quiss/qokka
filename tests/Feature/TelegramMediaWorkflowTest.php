@@ -13,7 +13,7 @@ use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
 use App\Models\TelegramAccount;
@@ -44,7 +44,7 @@ class TelegramMediaWorkflowTest extends TestCase
     public function test_history_payload_extracts_photo_and_video_descriptors(): void
     {
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $factory = app(TelegramMessagePayloadFactory::class);
         $photoPayload = $factory->fromRawMessage($account, $channel, [
             'id' => 10,
@@ -103,7 +103,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -137,7 +137,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -175,7 +175,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -210,7 +210,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
@@ -252,7 +252,7 @@ class TelegramMediaWorkflowTest extends TestCase
             'last_seen_at' => now()->subMinutes(10),
         ]);
         $messageAccount = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $staleCollector->id,
@@ -261,9 +261,9 @@ class TelegramMediaWorkflowTest extends TestCase
             $staleCollector->id => ['access_status' => TelegramSourceAccessStatus::Available->value],
             $messageAccount->id => ['access_status' => TelegramSourceAccessStatus::Available->value],
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'telegram_account_id' => $messageAccount->id,
             'external_message_id' => 100,
             'text' => 'Фото',
@@ -304,17 +304,17 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
         ]);
         $channel->telegramAccounts()->attach($account, [
             'access_status' => TelegramSourceAccessStatus::Available->value,
         ]);
         $message = SourcePost::factory()
-            ->create(['source_channel_id' => $channel->id])
+            ->create(['source_id' => $channel->id])
             ->messages()
             ->create([
-                'source_channel_id' => $channel->id,
+                'source_id' => $channel->id,
                 'telegram_account_id' => $account->id,
                 'external_message_id' => 100,
                 'entities' => [],
@@ -339,12 +339,12 @@ class TelegramMediaWorkflowTest extends TestCase
     public function test_missing_media_backlog_does_not_retry_terminal_failures_implicitly(): void
     {
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'telegram_account_id' => $account->id,
             'external_message_id' => 100,
             'entities' => [],
@@ -391,7 +391,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'collector_telegram_account_id' => $account->id,
         ]);
@@ -437,7 +437,7 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Queue::fake();
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'collector_telegram_account_id' => $account->id,
         ]);
@@ -593,13 +593,13 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
         ]);
-        $firstPost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
-        $secondPost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $firstPost = SourcePost::factory()->create(['source_id' => $channel->id]);
+        $secondPost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $firstMessage = $firstPost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Первое фото',
             'entities' => [],
@@ -608,7 +608,7 @@ class TelegramMediaWorkflowTest extends TestCase
             'posted_at' => now(),
         ]);
         $secondMessage = $secondPost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 101,
             'text' => 'Второе фото',
             'entities' => [],
@@ -663,14 +663,14 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -1_002_586_170_533,
             'username' => 'public_source',
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 5721,
             'text' => 'Фото',
             'entities' => [],
@@ -721,14 +721,14 @@ class TelegramMediaWorkflowTest extends TestCase
         Storage::fake('local');
         Storage::disk('local')->put('telegram/previews/unavailable.jpg', 'preview');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Удалённое видео',
             'entities' => [],
@@ -792,14 +792,14 @@ class TelegramMediaWorkflowTest extends TestCase
         Storage::fake('local');
         Storage::disk('local')->put('telegram/media/video.mp4', 'video');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Скачанное видео',
             'entities' => [],
@@ -871,14 +871,14 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Видео',
             'entities' => [],
@@ -928,14 +928,14 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Фото',
             'entities' => [],
@@ -994,14 +994,14 @@ class TelegramMediaWorkflowTest extends TestCase
         Storage::fake('local');
         config(['services.telegram.media_max_bytes' => 10]);
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Фото',
             'entities' => [],
@@ -1047,14 +1047,14 @@ class TelegramMediaWorkflowTest extends TestCase
     {
         Storage::fake('local');
         $account = TelegramAccount::factory()->create();
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'username' => null,
             'collector_telegram_account_id' => $account->id,
         ]);
-        $sourcePost = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $sourcePost = SourcePost::factory()->create(['source_id' => $channel->id]);
         $message = $sourcePost->messages()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'external_message_id' => 100,
             'text' => 'Фото',
             'entities' => [],

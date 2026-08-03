@@ -173,12 +173,12 @@ class PlannedPostMediaManager
     /** @return Collection<int, MediaAsset> */
     public function availableAssets(PlannedPost $plannedPost): Collection
     {
-        $plannedPost->loadMissing('storyCandidate.sourcePosts.sourceChannel', 'storyCandidate.sourcePosts.mediaAssets');
+        $plannedPost->loadMissing('storyCandidate.sourcePosts.source', 'storyCandidate.sourcePosts.mediaAssets');
 
         return $plannedPost->storyCandidate->sourcePosts
             ->flatMap(function ($sourcePost) {
                 return $sourcePost->mediaAssets->map(function (MediaAsset $asset) use ($sourcePost): MediaAsset {
-                    $asset->setAttribute('source_label', $sourcePost->sourceChannel->title);
+                    $asset->setAttribute('source_label', $sourcePost->source->title);
                     $asset->setAttribute('source_url', $sourcePost->source_url);
 
                     return $asset;

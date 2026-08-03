@@ -3,7 +3,8 @@
 namespace App\Actions;
 
 use App\Jobs\VerifySourceChannelAccessJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
+use App\SourceType;
 
 class ReconcileTelegramCollectors
 {
@@ -15,7 +16,8 @@ class ReconcileTelegramCollectors
         $reassigned = 0;
         $shouldStop ??= static fn (): bool => false;
 
-        SourceChannel::query()
+        Source::query()
+            ->where('type', SourceType::Telegram)
             ->where('is_active', true)
             ->with([
                 'collectorTelegramAccount',
@@ -23,22 +25,22 @@ class ReconcileTelegramCollectors
                 'telegramAccounts',
             ])
             ->orderBy('id')
-            ->each(function (SourceChannel $sourceChannel) use (&$reassigned, $shouldStop): ?bool {
+            ->each(function (Source $source) use (&$reassigned, $shouldStop): ?bool {
                 if ($shouldStop()) {
                     return false;
                 }
 
-                $current = $sourceChannel->collectorTelegramAccount;
+                $current = $source->collectorTelegramAccount;
                 $isCurrentUsable = $current !== null
                     && $current->isCollectorReady()
-                    && $sourceChannel->hasAvailableAccessFor($current->id);
-                $preferred = $sourceChannel->preferredCollectorTelegramAccount;
+                    && $source->hasAvailableAccessFor($current->id);
+                $preferred = $source->preferredCollectorTelegramAccount;
                 $isPreferredUsable = $preferred !== null
                     && $preferred->isCollectorReady()
-                    && $sourceChannel->hasAvailableAccessFor($preferred->id);
+                    && $source->hasAvailableAccessFor($preferred->id);
                 $shouldRetryPreferred = $preferred !== null
                     && $preferred->isCollectorReady()
-                    && $sourceChannel->shouldRetryPreferredCollectorSubscription();
+                    && $source->shouldRetryPreferredCollectorSubscription();
                 $shouldKeepCurrent = $isCurrentUsable
                     && (
                         $preferred === null
@@ -51,12 +53,12 @@ class ReconcileTelegramCollectors
                 }
 
                 if ($shouldRetryPreferred) {
-                    VerifySourceChannelAccessJob::dispatch($sourceChannel->id)->onQueue('telegram');
+                    VerifySourceChannelAccessJob::dispatch($source->id)->onQueue('telegram');
                 }
 
-                $previousId = $sourceChannel->collector_telegram_account_id;
+                $previousId = $source->collector_telegram_account_id;
                 $selected = $this->assignTelegramCollector->handle(
-                    $sourceChannel,
+                    $source,
                     clearWhenUnavailable: false,
                 );
 

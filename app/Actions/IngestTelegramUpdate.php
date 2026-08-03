@@ -4,10 +4,11 @@ namespace App\Actions;
 
 use App\MediaType;
 use App\Models\MediaAsset;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\TelegramAccount;
+use App\SourceType;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -19,7 +20,7 @@ class IngestTelegramUpdate
 {
     public function __construct(
         private readonly RequestTelegramMediaDownload $requestMediaDownload,
-        private readonly DetachUnavailableTelegramMedia $detachUnavailableMedia,
+        private readonly DetachUnavailableSourceMedia $detachUnavailableMedia,
     ) {}
 
     /** @param array<string, mixed> $payload */
@@ -33,7 +34,8 @@ class IngestTelegramUpdate
             return null;
         }
 
-        $channel = SourceChannel::query()
+        $channel = Source::query()
+            ->where('type', SourceType::Telegram)
             ->where('is_active', true)
             ->whereBelongsTo($account, 'collectorTelegramAccount')
             ->where(function ($query) use ($payload): void {
@@ -50,7 +52,7 @@ class IngestTelegramUpdate
         }
 
         return DB::transaction(function () use ($account, $channel, $payload): ?SourcePost {
-            SourceChannel::query()
+            Source::query()
                 ->whereKey($channel->id)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -62,7 +64,7 @@ class IngestTelegramUpdate
             $isDeleted = $eventType === 'delete';
             $isMetricsUpdate = $eventType === 'metrics';
             $existingMessage = ($isDeleted || $isMetricsUpdate) ? SourceMessage::query()
-                ->where('source_channel_id', $channel->id)
+                ->where('source_id', $channel->id)
                 ->where('external_message_id', $payload['message_id'])
                 ->first() : null;
 
@@ -74,7 +76,7 @@ class IngestTelegramUpdate
                 $sourcePost = $existingMessage->sourcePost;
             } else {
                 $sourcePost = SourcePost::query()->firstOrCreate(
-                    ['source_channel_id' => $channel->id, 'canonical_key' => $canonicalKey],
+                    ['source_id' => $channel->id, 'canonical_key' => $canonicalKey],
                     [
                         'telegram_grouped_id' => $payload['grouped_id'] ?? null,
                         'posted_at' => $postedAt,
@@ -112,7 +114,7 @@ class IngestTelegramUpdate
             }
 
             $message = $sourcePost->messages()->updateOrCreate(
-                ['source_channel_id' => $channel->id, 'external_message_id' => $payload['message_id']],
+                ['source_id' => $channel->id, 'external_message_id' => $payload['message_id']],
                 $messageValues,
             );
 

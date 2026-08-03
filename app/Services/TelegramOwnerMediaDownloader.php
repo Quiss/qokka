@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Actions\DetachUnavailableTelegramMedia;
+use App\Actions\DetachUnavailableSourceMedia;
 use App\Contracts\MadelineClient;
 use App\Contracts\TelegramMediaClient;
 use App\Exceptions\PermanentTelegramMediaException;
@@ -21,7 +21,7 @@ use Throwable;
 class TelegramOwnerMediaDownloader
 {
     public function __construct(
-        private readonly DetachUnavailableTelegramMedia $detachUnavailableMedia,
+        private readonly DetachUnavailableSourceMedia $detachUnavailableMedia,
     ) {}
 
     /**
@@ -40,7 +40,7 @@ class TelegramOwnerMediaDownloader
     ): array {
         $mediaAssetId = (int) ($command->payload['media_asset_id'] ?? 0);
         $asset = MediaAsset::query()
-            ->with('originMediaAsset.sourceMessage.sourceChannel', 'sourceMessage.sourceChannel')
+            ->with('originMediaAsset.sourceMessage.source', 'sourceMessage.source')
             ->find($mediaAssetId);
 
         if ($asset === null) {
@@ -85,15 +85,15 @@ class TelegramOwnerMediaDownloader
         }
 
         $sourceMessage = $origin->sourceMessage;
-        $sourceChannel = $sourceMessage?->sourceChannel;
+        $source = $sourceMessage?->source;
 
-        if ($sourceMessage === null || $sourceChannel === null) {
+        if ($sourceMessage === null || $source === null) {
             throw new PermanentTelegramMediaException(
                 "Медиа {$origin->id} не связано с исходным Telegram-сообщением и каналом.",
             );
         }
 
-        $peer = $sourceChannel->telegramReference();
+        $peer = $source->telegramReference();
         $freshMessage = $client->getChannelMessage(
             $peer,
             $sourceMessage->external_message_id,

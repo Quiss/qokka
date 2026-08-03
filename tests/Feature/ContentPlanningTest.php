@@ -13,7 +13,7 @@ use App\Models\ContentPlan;
 use App\Models\Destination;
 use App\Models\PlannedPost;
 use App\Models\Publication;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
@@ -97,10 +97,10 @@ class ContentPlanningTest extends TestCase
             'services.openrouter.key' => 'test-key',
             'services.openrouter.url' => 'https://openrouter.test/api/v1',
         ]);
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $plan = ContentPlan::factory()->create();
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => CarbonImmutable::now()->subHour(),
         ]);
         $sourcePost->mediaAssets()->create([
@@ -111,7 +111,7 @@ class ContentPlanningTest extends TestCase
             'mime_type' => 'image/jpeg',
             'sort_order' => 0,
         ]);
-        $sourcePost = $sourcePost->fresh(['sourceChannel', 'mediaAssets']);
+        $sourcePost = $sourcePost->fresh(['source', 'mediaAssets']);
         Http::fake([
             'https://openrouter.test/*' => Http::response([
                 'choices' => [[
@@ -140,7 +140,59 @@ class ContentPlanningTest extends TestCase
                 && ! str_contains($prompt, '"selection_prompt"')
                 && ! str_contains($prompt, 'обязательный тематический фильтр');
         });
-        $this->assertSame('v5', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v6', AiRun::query()->sole()->prompt_version);
+    }
+
+    public function test_open_router_treats_json_collection_as_atomic_content_without_metric_penalty(): void
+    {
+        Http::preventStrayRequests();
+        config([
+            'services.openrouter.key' => 'test-key',
+            'services.openrouter.url' => 'https://openrouter.test/api/v1',
+        ]);
+        $source = Source::factory()->jsonCollection()->create(['title' => 'Qokka']);
+        $plan = ContentPlan::factory()->create();
+        $sourcePost = SourcePost::factory()->create([
+            'source_id' => $source->id,
+            'metrics' => ['available' => false],
+            'metadata' => [
+                'content_kind' => 'collection',
+                'collection' => [
+                    'collection_id' => 'collection-1',
+                    'title' => 'Детективы',
+                    'items' => [[
+                        'work_id' => 'work-1',
+                        'title' => 'Первый фильм',
+                        'year' => 2025,
+                        'description' => 'Описание.',
+                        'rating' => ['value' => 8.5, 'scale' => 10, 'source' => 'kinopoisk'],
+                    ]],
+                ],
+            ],
+        ])->fresh(['source', 'mediaAssets']);
+        Http::fake([
+            'https://openrouter.test/*' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode(['clusters' => []], JSON_THROW_ON_ERROR),
+                    ],
+                ]],
+                'usage' => [],
+            ]),
+        ]);
+
+        app(OpenRouterContentIntelligence::class)
+            ->rankAndCluster($plan, $sourcePost->newCollection([$sourcePost]));
+
+        Http::assertSent(function (Request $request): bool {
+            $prompt = (string) data_get($request->data(), 'messages.1.content.0.text');
+
+            return str_contains($prompt, 'content_kind=collection')
+                && str_contains($prompt, '"content_kind":"collection"')
+                && str_contains($prompt, '"metrics_available":false')
+                && str_contains($prompt, '"preliminary_score":null')
+                && str_contains($prompt, '"title":"Первый фильм"');
+        });
     }
 
     public function test_open_router_validates_draft_cluster_sources_before_returning_them(): void
@@ -150,18 +202,18 @@ class ContentPlanningTest extends TestCase
             'services.openrouter.key' => 'test-key',
             'services.openrouter.url' => 'https://openrouter.test/api/v1',
         ]);
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $plan = ContentPlan::factory()->create(['candidate_target' => 2]);
         $lightning = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Молния ударила в ракету во время запуска на космодроме.',
         ]);
         $nettle = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Во ВкусВилл появился набор для битья крапивы.',
         ]);
         $posts = SourcePost::query()
-            ->with(['sourceChannel', 'mediaAssets'])
+            ->with(['source', 'mediaAssets'])
             ->whereKey([$lightning->id, $nettle->id])
             ->get();
         Http::fake([
@@ -214,11 +266,11 @@ class ContentPlanningTest extends TestCase
             'publication_id' => $publication->id,
             'candidate_target' => 1,
         ]);
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'В Санкт-Петербурге открыли новую станцию метро.',
-        ])->load(['sourceChannel', 'mediaAssets']);
+        ])->load(['source', 'mediaAssets']);
         $cluster = [
             'source_post_ids' => [$sourcePost->id],
             'title' => 'В Петербурге открыли станцию метро',
@@ -255,7 +307,7 @@ class ContentPlanningTest extends TestCase
         }
 
         $this->assertSame(
-            ['v5', 'v5'],
+            ['v6', 'v6'],
             AiRun::query()->oldest('id')->pluck('prompt_version')->all(),
         );
     }
@@ -268,8 +320,8 @@ class ContentPlanningTest extends TestCase
             'services.openrouter.url' => 'https://openrouter.test/api/v1',
         ]);
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create([
             'source_group_id' => $group->id,
             'selection_prompt' => 'Отбирай только новости Санкт-Петербурга.',
@@ -279,7 +331,7 @@ class ContentPlanningTest extends TestCase
             'status' => ContentPlanStatus::Generating,
         ]);
         SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Общероссийская новость без связи с Петербургом.',
             'posted_at' => now()->subHour(),
         ]);
@@ -366,7 +418,7 @@ class ContentPlanningTest extends TestCase
         $this->assertStringContainsString('относительно posted_at источника', $prompt);
         $this->assertStringNotContainsString('легкий инфоповод может занять 1–2 коротких абзаца', $prompt);
         $this->assertStringNotContainsString('используй от 0 до 2 жирных акцентов', $prompt);
-        $this->assertSame(['v5', 'v5'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+        $this->assertSame(['v6', 'v6'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
     }
 
     public function test_plan_review_receives_source_and_publication_times_for_freshness_checks(): void
@@ -422,7 +474,7 @@ class ContentPlanningTest extends TestCase
         $this->assertStringContainsString('"publication_timezone":"Europe\/Moscow"', $prompt);
         $this->assertStringContainsString('"scheduled_at":"2026-07-27T12:00:00+03:00"', $prompt);
         $this->assertStringContainsString('"posted_at":"2026-07-26T15:00:00+00:00"', $prompt);
-        $this->assertSame('v5', AiRun::query()->sole()->prompt_version);
+        $this->assertSame('v6', AiRun::query()->sole()->prompt_version);
     }
 
     public function test_publication_builds_each_configured_signature_variant(): void
@@ -509,12 +561,12 @@ class ContentPlanningTest extends TestCase
     public function test_candidate_generation_filters_ads_and_creates_clustered_candidates(): void
     {
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create(['source_group_id' => $group->id]);
         $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
-        $news = SourcePost::factory()->create(['source_channel_id' => $channel->id, 'text' => 'Запущен важный городской проект']);
-        SourcePost::factory()->create(['source_channel_id' => $channel->id, 'text' => 'Реклама и промокод внутри']);
+        $news = SourcePost::factory()->create(['source_id' => $channel->id, 'text' => 'Запущен важный городской проект']);
+        SourcePost::factory()->create(['source_id' => $channel->id, 'text' => 'Реклама и промокод внутри']);
 
         $fake = new class($news->id) implements ContentIntelligence
         {
@@ -564,8 +616,8 @@ class ContentPlanningTest extends TestCase
     {
         $this->travelTo(CarbonImmutable::parse('2026-07-26 19:00:00', 'Europe/Moscow'));
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create([
             'source_group_id' => $group->id,
             'timezone' => 'Europe/Moscow',
@@ -578,22 +630,22 @@ class ContentPlanningTest extends TestCase
             'plan_date' => '2026-07-27',
         ]);
         $staleDatedWeather = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Погода 26 июля: в Петербурге ожидается дождь.',
             'posted_at' => now()->subHour(),
         ]);
         $staleRelativeWeather = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Сегодняшняя погода будет дождливой.',
             'posted_at' => now()->subHour(),
         ]);
         $currentWeather = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Завтра погода будет солнечной.',
             'posted_at' => now()->subHour(),
         ]);
         $cityNews = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'В Петербурге открыли новую станцию метро.',
             'posted_at' => now()->subHour(),
         ]);
@@ -646,8 +698,8 @@ class ContentPlanningTest extends TestCase
     public function test_candidate_generation_excludes_approved_sources_from_previous_plans_for_the_same_publication(): void
     {
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create(['source_group_id' => $group->id]);
         $previousPlan = ContentPlan::factory()->create([
             'publication_id' => $publication->id,
@@ -661,7 +713,7 @@ class ContentPlanningTest extends TestCase
 
         foreach ([CandidateStatus::Approved, CandidateStatus::Reserve, CandidateStatus::Selected] as $status) {
             $sourcePost = SourcePost::factory()->create([
-                'source_channel_id' => $channel->id,
+                'source_id' => $channel->id,
                 'text' => 'Одобренная новость '.$status->value,
                 'posted_at' => now()->subHour(),
             ]);
@@ -677,7 +729,7 @@ class ContentPlanningTest extends TestCase
 
         foreach ([CandidateStatus::Pending, CandidateStatus::Rejected] as $status) {
             $sourcePost = SourcePost::factory()->create([
-                'source_channel_id' => $channel->id,
+                'source_id' => $channel->id,
                 'text' => 'Неиспользованная новость '.$status->value,
                 'posted_at' => now()->subHour(),
             ]);
@@ -695,7 +747,7 @@ class ContentPlanningTest extends TestCase
             'plan_date' => today(),
         ]);
         $otherPublicationSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Новость другого канала публикаций',
             'posted_at' => now()->subHour(),
         ]);
@@ -707,7 +759,7 @@ class ContentPlanningTest extends TestCase
         $eligibleSourceIds[] = $otherPublicationSource->id;
 
         $freshSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'Новая новость',
             'posted_at' => now()->subHour(),
         ]);
@@ -751,8 +803,8 @@ class ContentPlanningTest extends TestCase
     public function test_candidate_regeneration_preserves_decisions_and_replaces_only_pending_candidates(): void
     {
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create([
             'source_group_id' => $group->id,
             'publish_window_start' => '09:00',
@@ -761,19 +813,19 @@ class ContentPlanningTest extends TestCase
         ]);
         $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
         $approvedSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $rejectedSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $pendingSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $freshSource = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subHour(),
         ]);
         $approvedCandidate = StoryCandidate::factory()->create([
@@ -848,12 +900,12 @@ class ContentPlanningTest extends TestCase
     public function test_candidate_generation_prevents_source_reuse_and_prefers_primary_source_with_media(): void
     {
         $group = SourceGroup::factory()->create();
-        $channel = SourceChannel::factory()->create();
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create();
+        $group->sources()->attach($channel);
         $publication = Publication::factory()->create(['source_group_id' => $group->id]);
         $plan = ContentPlan::factory()->create(['publication_id' => $publication->id]);
-        $textOnly = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
-        $withMedia = SourcePost::factory()->create(['source_channel_id' => $channel->id]);
+        $textOnly = SourcePost::factory()->create(['source_id' => $channel->id]);
+        $withMedia = SourcePost::factory()->create(['source_id' => $channel->id]);
         $withMedia->mediaAssets()->create([
             'external_id' => 'photo-primary',
             'type' => MediaType::Photo,

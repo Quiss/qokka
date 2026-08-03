@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-class DetachUnavailableTelegramMedia
+class DetachUnavailableSourceMedia
 {
     public function __construct(
         private readonly MediaFileGarbageCollector $mediaFileGarbageCollector,

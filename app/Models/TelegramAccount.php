@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\SourceType;
 use App\TelegramAccountStatus;
 use Database\Factories\TelegramAccountFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -26,8 +27,8 @@ use Illuminate\Support\Str;
  * @property Carbon|null $authorized_at
  * @property Carbon|null $last_seen_at
  * @property string|null $last_error
- * @property-read Collection<int, SourceChannel> $sourceChannels
- * @property-read Collection<int, SourceChannel> $assignedSourceChannels
+ * @property-read Collection<int, Source> $sources
+ * @property-read Collection<int, Source> $assignedSourceChannels
  * @property-read Collection<int, TelegramOwnerCommand> $ownerCommands
  */
 #[Fillable(['uuid', 'name', 'telegram_user_id', 'username', 'phone_hint', 'status', 'is_active', 'authorized_at', 'last_seen_at', 'last_error'])]
@@ -48,18 +49,19 @@ class TelegramAccount extends Model
         });
     }
 
-    /** @return BelongsToMany<SourceChannel, $this> */
-    public function sourceChannels(): BelongsToMany
+    /** @return BelongsToMany<Source, $this> */
+    public function sources(): BelongsToMany
     {
-        return $this->belongsToMany(SourceChannel::class)
+        return $this->belongsToMany(Source::class)
             ->withPivot(['access_status', 'last_checked_at', 'last_error'])
             ->withTimestamps();
     }
 
-    /** @return HasMany<SourceChannel, $this> */
+    /** @return HasMany<Source, $this> */
     public function assignedSourceChannels(): HasMany
     {
-        return $this->hasMany(SourceChannel::class, 'collector_telegram_account_id');
+        return $this->hasMany(Source::class, 'collector_telegram_account_id')
+            ->where('type', SourceType::Telegram);
     }
 
     /** @return HasMany<TelegramOwnerCommand, $this> */

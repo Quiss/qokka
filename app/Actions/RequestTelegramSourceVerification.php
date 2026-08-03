@@ -2,7 +2,7 @@
 
 namespace App\Actions;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use App\Services\TelegramOwnerCommandDispatcher;
 use App\TelegramAccountStatus;
@@ -14,8 +14,12 @@ class RequestTelegramSourceVerification
         private readonly TelegramOwnerCommandDispatcher $commandDispatcher,
     ) {}
 
-    public function handle(SourceChannel $sourceChannel): int
+    public function handle(Source $source): int
     {
+        if (! $source->isTelegram()) {
+            return 0;
+        }
+
         $count = 0;
 
         TelegramAccount::query()
@@ -25,12 +29,12 @@ class RequestTelegramSourceVerification
                 TelegramAccountStatus::Connected,
             ])
             ->orderBy('id')
-            ->each(function (TelegramAccount $account) use ($sourceChannel, &$count): void {
+            ->each(function (TelegramAccount $account) use ($source, &$count): void {
                 $this->commandDispatcher->dispatch(
                     $account,
                     TelegramOwnerCommandType::VerifySource,
-                    ['source_channel_id' => $sourceChannel->id],
-                    "source:{$sourceChannel->id}:verify",
+                    ['source_id' => $source->id],
+                    "source:{$source->id}:verify",
                     priority: 80,
                 );
                 $count++;

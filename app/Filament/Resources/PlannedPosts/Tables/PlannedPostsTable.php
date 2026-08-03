@@ -41,7 +41,7 @@ class PlannedPostsTable
                 'contentPlan.publication:id,timezone',
                 'mediaAssets',
                 'revisions.requestedBy',
-                'storyCandidate.sourcePosts.sourceChannel',
+                'storyCandidate.sourcePosts.source',
                 'storyCandidate.sourcePosts.mediaAssets',
             ]))
             ->columns([

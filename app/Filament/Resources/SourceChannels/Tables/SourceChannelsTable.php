@@ -2,9 +2,11 @@
 
 namespace App\Filament\Resources\SourceChannels\Tables;
 
+use App\Jobs\SyncJsonCollectionSourceJob;
 use App\Jobs\SyncSourceChannelStatisticsJob;
 use App\Jobs\VerifySourceChannelAccessJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
+use App\SourceType;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
@@ -30,15 +32,28 @@ class SourceChannelsTable
                     'telegramAccounts:id,name',
                 ]);
 
-                return (new SourceChannel)->scopeWithLastDayStatistics($query);
+                return (new Source)->scopeWithLastDayStatistics($query);
             })
             ->columns([
                 TextColumn::make('title')
                     ->label('Источник')
-                    ->description(fn (SourceChannel $record): string => $record->username ? '@'.$record->username : 'Telegram не указан')
-                    ->searchable(['title', 'username'])
+                    ->description(fn (Source $record): string => $record->isTelegram()
+                        ? ($record->username ? '@'.$record->username : 'Приватный Telegram-канал')
+                        : (string) parse_url((string) $record->endpoint_url, PHP_URL_HOST))
+                    ->searchable(['title', 'username', 'endpoint_url'])
                     ->sortable()
                     ->toggleable(),
+                TextColumn::make('type')
+                    ->label('Тип')
+                    ->badge()
+                    ->formatStateUsing(fn (SourceType $state): string => match ($state) {
+                        SourceType::Telegram => 'Telegram',
+                        SourceType::JsonCollection => 'JSON',
+                    })
+                    ->color(fn (SourceType $state): string => match ($state) {
+                        SourceType::Telegram => 'info',
+                        SourceType::JsonCollection => 'success',
+                    }),
                 TextColumn::make('sourceGroups.name')
                     ->label('Группы')
                     ->badge()
@@ -47,22 +62,32 @@ class SourceChannelsTable
                     ->toggleable(),
                 TextColumn::make('collector')
                     ->label('Сборщик')
-                    ->state(fn (SourceChannel $record): string => $record->collectorStatus())
+                    ->state(fn (Source $record): string => $record->isTelegram()
+                        ? $record->collectorStatus()
+                        : 'not_applicable')
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         'automatic' => 'Автоматически',
                         'preferred' => 'Предпочтительный',
                         'fallback' => 'Резервный',
+                        'not_applicable' => 'Не требуется',
                         default => 'Нет доступного',
                     })
                     ->badge()
                     ->toggleable()
-                    ->color(fn (SourceChannel $record): string => match ($record->collectorStatus()) {
+                    ->color(fn (Source $record): string => match ($record->isTelegram() ? $record->collectorStatus() : 'not_applicable') {
                         'preferred' => 'success',
                         'fallback' => 'warning',
                         'automatic' => 'info',
+                        'not_applicable' => 'gray',
                         default => 'danger',
                     })
-                    ->description(function (SourceChannel $record): string {
+                    ->description(function (Source $record): string {
+                        if (! $record->isTelegram()) {
+                            return $record->last_sync_error
+                                ? 'Ошибка: '.Str::limit($record->last_sync_error, 80)
+                                : 'Фоновая HTTP-синхронизация';
+                        }
+
                         $currentCollector = $record->collector_telegram_account_id === null
                             ? 'не назначен'
                             : $record->collectorTelegramAccount->name;
@@ -77,7 +102,7 @@ class SourceChannelsTable
                             ? $description.' · Ошибка: '.Str::limit($lastError, 60)
                             : $description;
                     })
-                    ->tooltip(fn (SourceChannel $record): ?string => $record->collectorLastError())
+                    ->tooltip(fn (Source $record): ?string => $record->collectorLastError())
                     ->wrap(),
                 ViewColumn::make('statistics')
                     ->label('Статистика · 24ч')
@@ -88,9 +113,15 @@ class SourceChannelsTable
                     ->boolean()
                     ->toggleable(),
                 TextColumn::make('last_event_at')
-                    ->label('Последняя новость')
+                    ->label('Последний материал')
                     ->since()
                     ->placeholder('Нет событий')
+                    ->sortable()
+                    ->toggleable(),
+                TextColumn::make('last_synced_at')
+                    ->label('JSON синхронизирован')
+                    ->since()
+                    ->placeholder('Ещё не синхронизирован')
                     ->sortable()
                     ->toggleable(),
                 TextColumn::make('weight')
@@ -122,6 +153,12 @@ class SourceChannelsTable
                     ->multiple()
                     ->searchable()
                     ->preload(),
+                SelectFilter::make('type')
+                    ->label('Тип')
+                    ->options([
+                        SourceType::Telegram->value => 'Telegram',
+                        SourceType::JsonCollection->value => 'JSON-подборки',
+                    ]),
             ])
             ->reorderableColumns()
             ->deferColumnManager(false)
@@ -130,8 +167,8 @@ class SourceChannelsTable
                 Action::make('syncStatistics')
                     ->label('Обновить статистику')
                     ->icon('heroicon-o-arrow-path')
-                    ->visible(fn (SourceChannel $record): bool => $record->collector_telegram_account_id !== null)
-                    ->action(function (SourceChannel $record): void {
+                    ->visible(fn (Source $record): bool => $record->isTelegram() && $record->collector_telegram_account_id !== null)
+                    ->action(function (Source $record): void {
                         SyncSourceChannelStatisticsJob::dispatch($record->id)->onQueue('telegram');
                         Notification::make()
                             ->title('Статистика за 24 часа поставлена в очередь')
@@ -141,10 +178,35 @@ class SourceChannelsTable
                 Action::make('verify')
                     ->label('Проверить доступ')
                     ->icon('heroicon-o-signal')
-                    ->action(function (SourceChannel $record): void {
+                    ->visible(fn (Source $record): bool => $record->isTelegram())
+                    ->action(function (Source $record): void {
                         VerifySourceChannelAccessJob::dispatch($record->id)->onQueue('telegram');
                         Notification::make()
                             ->title('Проверка источника поставлена в очередь')
+                            ->success()
+                            ->send();
+                    }),
+                Action::make('syncJson')
+                    ->label('Синхронизировать')
+                    ->icon('heroicon-o-arrow-path')
+                    ->visible(fn (Source $record): bool => $record->isJsonCollection())
+                    ->action(function (Source $record): void {
+                        SyncJsonCollectionSourceJob::dispatch($record->id)->onQueue('ingest');
+                        Notification::make()
+                            ->title('JSON-источник поставлен в очередь')
+                            ->success()
+                            ->send();
+                    }),
+                Action::make('clearAuthorization')
+                    ->label('Удалить Authorization')
+                    ->icon('heroicon-o-key')
+                    ->color('warning')
+                    ->requiresConfirmation()
+                    ->visible(fn (Source $record): bool => $record->isJsonCollection() && $record->authorization() !== null)
+                    ->action(function (Source $record): void {
+                        $record->update(['credentials' => null]);
+                        Notification::make()
+                            ->title('Authorization удалён')
                             ->success()
                             ->send();
                     }),

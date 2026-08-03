@@ -17,10 +17,10 @@ class SourceGroup extends Model
 
     protected $attributes = ['is_active' => true];
 
-    /** @return BelongsToMany<SourceChannel, $this> */
-    public function sourceChannels(): BelongsToMany
+    /** @return BelongsToMany<Source, $this> */
+    public function sources(): BelongsToMany
     {
-        return $this->belongsToMany(SourceChannel::class);
+        return $this->belongsToMany(Source::class, 'source_group_source');
     }
 
     /** @return HasMany<Publication, $this> */

@@ -4,7 +4,7 @@ namespace Tests\Feature;
 
 use App\Actions\AssignTelegramCollector;
 use App\Actions\ReconcileTelegramCollectors;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use App\Services\TelegramApiServer;
 use App\TelegramAccountStatus;
@@ -34,7 +34,7 @@ class TelegramAccountManagementTest extends TestCase
 
     public function test_source_reference_is_normalized(): void
     {
-        $source = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => 'https://t.me/example_channel/123',
             'title' => null,
         ]);
@@ -53,8 +53,8 @@ class TelegramAccountManagementTest extends TestCase
             'status' => TelegramAccountStatus::Connected,
             'last_seen_at' => now(),
         ]);
-        SourceChannel::factory()->create(['collector_telegram_account_id' => $first->id]);
-        $source = SourceChannel::factory()->create([
+        Source::factory()->create(['collector_telegram_account_id' => $first->id]);
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => null,
         ]);
@@ -79,7 +79,7 @@ class TelegramAccountManagementTest extends TestCase
             'status' => TelegramAccountStatus::Connected,
             'last_seen_at' => now(),
         ]);
-        $source = SourceChannel::factory()->create([
+        $source = Source::factory()->create([
             'username' => null,
             'collector_telegram_account_id' => $stale->id,
         ]);
@@ -98,11 +98,11 @@ class TelegramAccountManagementTest extends TestCase
     {
         config(['services.telegram.bridge_secret' => 'bridge-secret']);
         $account = TelegramAccount::factory()->create();
-        $assigned = SourceChannel::factory()->create([
+        $assigned = Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
             'telegram_peer_id' => -100123,
         ]);
-        SourceChannel::factory()->create(['telegram_peer_id' => -100999]);
+        Source::factory()->create(['telegram_peer_id' => -100999]);
         $body = json_encode(['telegram_account_uuid' => $account->uuid], JSON_THROW_ON_ERROR);
         $timestamp = (string) now()->timestamp;
         $nonce = (string) Str::uuid();

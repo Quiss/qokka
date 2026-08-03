@@ -12,16 +12,16 @@ class TelegramMediaDownloadAccountResolver
     {
         $sourceMessage->loadMissing([
             'telegramAccount',
-            'sourceChannel.collectorTelegramAccount',
-            'sourceChannel.telegramAccounts',
+            'source.collectorTelegramAccount',
+            'source.telegramAccounts',
         ]);
-        $sourceChannel = $sourceMessage->sourceChannel;
+        $source = $sourceMessage->source;
         $accounts = collect([
-            $sourceChannel->collectorTelegramAccount,
+            $source->collectorTelegramAccount,
             $sourceMessage->telegramAccount,
         ])
             ->filter()
-            ->concat($sourceChannel->telegramAccounts)
+            ->concat($source->telegramAccounts)
             ->unique('id');
         $account = $accounts->first(
             fn (TelegramAccount $account): bool => $account->is_active
@@ -30,8 +30,8 @@ class TelegramMediaDownloadAccountResolver
                     TelegramAccountStatus::Connected,
                 ], true)
                 && (
-                    $sourceChannel->collector_telegram_account_id === $account->id
-                    || $sourceChannel->hasAvailableAccessFor($account->id)
+                    $source->collector_telegram_account_id === $account->id
+                    || $source->hasAvailableAccessFor($account->id)
                 ),
         );
 
@@ -39,8 +39,8 @@ class TelegramMediaDownloadAccountResolver
             return null;
         }
 
-        if ($sourceChannel->collector_telegram_account_id !== $account->id) {
-            $sourceChannel->update(['collector_telegram_account_id' => $account->id]);
+        if ($source->collector_telegram_account_id !== $account->id) {
+            $source->update(['collector_telegram_account_id' => $account->id]);
         }
 
         return $account;

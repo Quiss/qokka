@@ -2,6 +2,7 @@
 
 namespace App\Actions;
 
+use App\Jobs\DownloadRemoteMediaAssetJob;
 use App\Models\MediaAsset;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -54,7 +55,11 @@ class QueueMediaAssetDownloadRetries
             DB::afterCommit(function () use ($origins): void {
                 foreach ($origins as $origin) {
                     try {
-                        $this->requestMediaDownload->handle($origin);
+                        if (filled(data_get($origin->metadata, 'remote_url'))) {
+                            DownloadRemoteMediaAssetJob::dispatch($origin->id)->onQueue('ingest');
+                        } else {
+                            $this->requestMediaDownload->handle($origin);
+                        }
                     } catch (Throwable $exception) {
                         $metadata = is_array($origin->metadata) ? $origin->metadata : [];
                         $origin->update([
@@ -69,7 +74,7 @@ class QueueMediaAssetDownloadRetries
                                 'failed_at' => $origin->failed_at,
                                 'metadata' => $origin->metadata,
                             ]);
-                        Log::warning('Telegram media retry could not create an owner command.', [
+                        Log::warning('Source media retry could not be queued.', [
                             'media_asset_id' => $origin->id,
                             'error' => $exception->getMessage(),
                         ]);

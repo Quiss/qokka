@@ -5,7 +5,7 @@ namespace Tests\Feature;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use App\Models\StoryCandidate;
@@ -21,22 +21,22 @@ class SourcePostPruningTest extends TestCase
     {
         $this->travelTo('2026-07-24 12:00:00');
         Storage::fake('local');
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $oldPost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subDays(14)->subSecond(),
         ]);
         $boundaryPost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subDays(14),
         ]);
         $recentPost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subDays(13),
         ]);
         $message = SourceMessage::factory()->create([
             'source_post_id' => $oldPost->id,
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
         ]);
         $asset = MediaAsset::factory()->for($oldPost, 'mediable')->create([
             'source_message_id' => $message->id,
@@ -69,9 +69,9 @@ class SourcePostPruningTest extends TestCase
     {
         $this->travelTo('2026-07-24 12:00:00');
         Storage::fake('local');
-        $channel = SourceChannel::factory()->create();
+        $channel = Source::factory()->create();
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'posted_at' => now()->subDays(15),
         ]);
         $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([

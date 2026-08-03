@@ -15,7 +15,7 @@ use App\Models\ContentPlan;
 use App\Models\Destination;
 use App\Models\PlannedPost;
 use App\Models\Publication;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
 use App\Models\User;
@@ -34,10 +34,10 @@ class EditorialEndToEndFlowTest extends TestCase
     {
         Queue::fake();
         $group = SourceGroup::factory()->create(['name' => 'Про Питер']);
-        $channel = SourceChannel::factory()->create(['title' => 'Еда Питера']);
-        $group->sourceChannels()->attach($channel);
+        $channel = Source::factory()->create(['title' => 'Еда Питера']);
+        $group->sources()->attach($channel);
         $sourcePost = SourcePost::factory()->create([
-            'source_channel_id' => $channel->id,
+            'source_id' => $channel->id,
             'text' => 'В Петербурге открылось новое общественное пространство',
             'posted_at' => now()->subHour(),
         ]);

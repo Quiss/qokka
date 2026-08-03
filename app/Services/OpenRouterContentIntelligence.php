@@ -52,12 +52,18 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'recent_committed_posts' => $recentCommittedPosts,
             'posts' => $sourcePosts->map(fn ($post): array => [
                 'id' => $post->id,
-                'channel' => $post->sourceChannel->title,
-                'channel_weight' => (float) $post->sourceChannel->weight,
+                'source' => $post->source->title,
+                'source_type' => $post->source->type->value,
+                'source_weight' => (float) $post->source->weight,
+                'content_kind' => $post->isCollection() ? 'collection' : 'article',
                 'text' => Str::limit($post->text ?? '', 1500),
                 'metrics' => $post->metrics,
+                'metrics_available' => ! $post->isCollection(),
                 'posted_at' => $post->posted_at->toIso8601String(),
-                'preliminary_score' => $this->preliminaryScore($post->metrics ?? [], $post->posted_at, (float) $post->sourceChannel->weight),
+                'preliminary_score' => $post->isCollection()
+                    ? null
+                    : $this->preliminaryScore($post->metrics ?? [], $post->posted_at, (float) $post->source->weight),
+                'structured_content' => $post->collectionPayload(),
                 'media' => $post->mediaAssets
                     ->map(fn (MediaAsset $asset): string => $asset->type->value)
                     ->all(),
@@ -72,7 +78,8 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             'type' => 'text',
             'text' => 'Сгруппируй сообщения об одном инфоповоде, оцени новостную ценность от 0 до 100 и верни лучшие кластеры. '
                 .$this->selectionFilterInstruction($publication->selection_prompt)
-                .'Учитывай предварительный балл, свежесть, охват, реакции, вес источника, практическую ценность и оригинальность. '
+                .'Учитывай предварительный балл, свежесть, охват, реакции, вес источника, практическую ценность и оригинальность. Отсутствующие метрики нейтральны и не равны нулевой популярности. '
+                .'Материал с content_kind=collection — готовая редакционная подборка: оценивай её целиком, не разделяй items на разные кластеры и не смешивай с посторонними событиями. '
                 .'Отбирай инфоповод только если он останется актуальным к указанным слотам публикации. '
                 .'Не включай прогноз погоды, дорожное ограничение, отключение, расписание, анонс или другую оперативную информацию, если она относится к более ранней дате или закончится до публикации. '
                 .'Относительные слова «сегодня», «завтра» и подобные трактуй относительно posted_at источника. Не переноси старый факт на дату плана и не исправляй дату догадкой. '
@@ -101,7 +108,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->analysis_model ?: config('services.openrouter.analysis_model'),
             [$this->systemMessage('Ты редактор русскоязычного новостного канала. Не выдумывай факты.'), $prompt],
             $this->rankingSchema(),
-            'v5',
+            'v6',
         ));
 
         if ($draft['clusters'] === []) {
@@ -118,7 +125,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
 
     public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
     {
-        $plannedPost->loadMissing('contentPlan.publication.destination', 'storyCandidate.sourcePosts.sourceChannel', 'storyCandidate.sourcePosts.mediaAssets');
+        $plannedPost->loadMissing('contentPlan.publication.destination', 'storyCandidate.sourcePosts.source', 'storyCandidate.sourcePosts.mediaAssets');
         $candidate = $plannedPost->storyCandidate;
         $publication = $plannedPost->contentPlan->publication;
         $signature = $publication->signatureMarkdown($publication->destination);
@@ -139,14 +146,18 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             ->all();
         $sources = $candidate->sourcePosts->map(fn ($post): array => [
             'source_post_id' => $post->id,
-            'channel' => $post->sourceChannel->title,
+            'source' => $post->source->title,
+            'source_type' => $post->source->type->value,
+            'content_kind' => $post->isCollection() ? 'collection' : 'article',
             'text' => $post->text,
+            'structured_content' => $post->collectionPayload(),
             'posted_at' => $post->posted_at->toIso8601String(),
         ])->all();
         $content = [[
             'type' => 'text',
             'text' => 'Перепиши инфоповод в готовый самостоятельный Telegram-пост. Не указывай источники и не добавляй неподтвержденные факты. '
                 .'Используй только согласованные или однозначно подтвержденные сведения. Противоречивые детали не включай в текст и добавь риск source_conflict. '
+                .'Если источник содержит content_kind=collection, создай один пост по всей подборке и упомяни каждый item; не разделяй подборку и не выдумывай отсутствующие факты или поля. '
                 .'Плановая публикация: '.($publicationMoment?->toIso8601String() ?? 'не задана').", часовой пояс: {$publication->timezone}. "
                 .'Проверь, будет ли инфоповод актуален в этот момент. Если прогноз, ограничение, отключение, расписание, анонс или другая оперативная информация относится к уже прошедшей дате, не подменяй дату и добавь риск stale_at_publication. '
                 .'Слова «сегодня», «завтра» и подобные в источниках трактуй относительно posted_at источника, а в готовом тексте используй только тогда, когда они однозначно верны для момента публикации. '
@@ -179,7 +190,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
             [$this->systemMessage('Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.'), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
-            'v5',
+            'v6',
         ));
 
         if ($this->hasExpectedSignature($result['text'], $signature)) {
@@ -195,7 +206,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
             ],
             $this->rewriteSchema(),
-            'v5',
+            'v6',
         ));
 
         if (! $this->hasExpectedSignature($corrected['text'], $signature)) {
@@ -211,15 +222,18 @@ class OpenRouterContentIntelligence implements ContentIntelligence
 
     public function reviewPlan(ContentPlan $contentPlan): array
     {
-        $contentPlan->loadMissing('publication', 'plannedPosts.storyCandidate.sourcePosts.sourceChannel');
+        $contentPlan->loadMissing('publication', 'plannedPosts.storyCandidate.sourcePosts.source');
         $items = $contentPlan->plannedPosts->map(fn ($post): array => [
             'planned_post_id' => $post->id,
             'scheduled_at' => $post->scheduled_at?->setTimezone($contentPlan->publication->timezone)->toIso8601String(),
             'text' => $post->text,
             'sources' => $post->storyCandidate->sourcePosts->map(fn (SourcePost $sourcePost): array => [
                 'source_post_id' => $sourcePost->id,
-                'channel' => $sourcePost->sourceChannel->title,
+                'source' => $sourcePost->source->title,
+                'source_type' => $sourcePost->source->type->value,
+                'content_kind' => $sourcePost->isCollection() ? 'collection' : 'article',
                 'text' => Str::limit($sourcePost->text ?? '', 2000),
+                'structured_content' => $sourcePost->collectionPayload(),
                 'posted_at' => $sourcePost->posted_at->toIso8601String(),
             ])->values()->all(),
         ])->all();
@@ -245,7 +259,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                     .json_encode($reviewData, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
             ],
             $this->reviewSchema(),
-            'v5',
+            'v6',
         ));
     }
 
@@ -340,8 +354,11 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             ->whereIn('id', $referencedIds)
             ->map(fn ($post): array => [
                 'id' => $post->id,
-                'channel' => $post->sourceChannel->title,
+                'source' => $post->source->title,
+                'source_type' => $post->source->type->value,
+                'content_kind' => $post->isCollection() ? 'collection' : 'article',
                 'text' => Str::limit($post->text ?? '', 1800),
+                'structured_content' => $post->collectionPayload(),
                 'posted_at' => $post->posted_at->toIso8601String(),
             ])
             ->values()
@@ -363,8 +380,9 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 'text' => 'Проверь черновые кластеры перед сохранением. Это строгий факт-чек связей, а не повторное творческое ранжирование. '
                     .$this->selectionFilterInstruction($contentPlan->publication->selection_prompt)
                     .'В одном кластере должны быть только сообщения об одном и том же конкретном событии. Общая тема, один бренд, молния, кино, еда или один источник не означают один инфоповод. '
+                    .'Исключение: source_post с content_kind=collection уже является единой редакционной подборкой. Сохрани такой source_post атомарным, не разделяй его items и не отклоняй только потому, что в нём несколько фильмов или сериалов. '
                     .'Удаляй каждый source_post_id, текст которого не подтверждает заголовок и summary. Один source_post_id разрешено использовать максимум в одном итоговом кластере. '
-                    .'Не объединяй разные фильмы, товары, заявления или события в тематические дайджесты. Если черновик смешал несколько событий, раздели его или оставь только связную часть. '
+                    .'Для обычных article не объединяй разные фильмы, товары, заявления или события в тематические дайджесты. Если черновик смешал несколько событий, раздели его или оставь только связную часть. '
                     .'Удаляй кластеры с прогнозом погоды, ограничением, отключением, расписанием, анонсом или другой оперативной информацией, которая относится к дате раньше плана либо закончится до возможного слота публикации. '
                     .'Относительные даты считай от posted_at источника; не заменяй исходную дату датой плана. '
                     .'Перепиши title и summary так, чтобы они описывали исключительно оставшиеся источники. Не добавляй идентификаторы, которых нет в posts. '
@@ -382,7 +400,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
                 $prompt,
             ],
             $this->rankingSchema(),
-            'v5',
+            'v6',
         ));
     }
 

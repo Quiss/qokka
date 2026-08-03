@@ -3,7 +3,7 @@
 namespace App\Actions;
 
 use App\Models\MediaAsset;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourcePost;
 use App\Services\MediaFileGarbageCollector;
 use Illuminate\Support\Facades\DB;
@@ -17,17 +17,17 @@ class PurgeSourceChannelContent
     /**
      * @return array{posts: int, messages: int, media: int, candidate_links: int, files: int}
      */
-    public function handle(SourceChannel $sourceChannel): array
+    public function handle(Source $source): array
     {
-        $result = DB::transaction(function () use ($sourceChannel): array {
-            SourceChannel::query()
-                ->whereKey($sourceChannel->id)
+        $result = DB::transaction(function () use ($source): array {
+            Source::query()
+                ->whereKey($source->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $postQuery = SourcePost::query()->whereBelongsTo($sourceChannel);
+            $postQuery = SourcePost::query()->whereBelongsTo($source);
             $postIds = $postQuery->pluck('id');
-            $messages = $sourceChannel->messages()->count();
+            $messages = $source->messages()->count();
             $candidateLinks = DB::table('source_post_story_candidate')
                 ->whereIn('source_post_id', $postIds)
                 ->count();
@@ -40,9 +40,9 @@ class PurgeSourceChannelContent
 
             MediaAsset::query()->whereKey($assets->modelKeys())->delete();
             $posts = $postQuery->delete();
-            $metadata = is_array($sourceChannel->metadata) ? $sourceChannel->metadata : [];
+            $metadata = is_array($source->metadata) ? $source->metadata : [];
             unset($metadata['statistics_sync']);
-            $sourceChannel->update([
+            $source->update([
                 'last_event_at' => null,
                 'last_backfilled_at' => null,
                 'metadata' => $metadata,

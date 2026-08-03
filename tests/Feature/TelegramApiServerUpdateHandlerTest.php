@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\IngestTelegramUpdateJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use App\Services\TelegramApiServerUpdateHandler;
 use App\TelegramAccountStatus;
@@ -21,7 +21,7 @@ class TelegramApiServerUpdateHandlerTest extends TestCase
         $account = TelegramAccount::factory()->create();
         $channelId = 123456;
         $peerId = -(1_000_000_000_000 + $channelId);
-        SourceChannel::factory()->create([
+        Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
             'telegram_peer_id' => $peerId,
         ]);
@@ -99,7 +99,7 @@ class TelegramApiServerUpdateHandlerTest extends TestCase
         Queue::fake();
         $account = TelegramAccount::factory()->create();
         $channelId = 321;
-        SourceChannel::factory()->create([
+        Source::factory()->create([
             'collector_telegram_account_id' => $account->id,
             'telegram_peer_id' => -(1_000_000_000_000 + $channelId),
         ]);

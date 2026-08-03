@@ -2,7 +2,7 @@
 
 namespace Database\Factories;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\SourceMessage;
 use App\Models\SourcePost;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -21,7 +21,7 @@ class SourceMessageFactory extends Factory
     {
         return [
             'source_post_id' => SourcePost::factory(),
-            'source_channel_id' => SourceChannel::factory(),
+            'source_id' => Source::factory(),
             'external_message_id' => fake()->unique()->numberBetween(1, 2_000_000_000),
             'text' => fake()->paragraph(),
             'entities' => [],

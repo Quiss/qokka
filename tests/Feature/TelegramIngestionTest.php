@@ -4,7 +4,7 @@ namespace Tests\Feature;
 
 use App\Actions\IngestTelegramUpdate;
 use App\Jobs\IngestTelegramUpdateJob;
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -54,7 +54,7 @@ class TelegramIngestionTest extends TestCase
 
     public function test_album_messages_are_grouped_and_edits_are_idempotent(): void
     {
-        $channel = SourceChannel::factory()->create([
+        $channel = Source::factory()->create([
             'telegram_peer_id' => -100123,
             'collector_telegram_account_id' => $this->telegramAccount->id,
         ]);
@@ -76,7 +76,7 @@ class TelegramIngestionTest extends TestCase
         $this->assertDatabaseCount('source_posts', 1);
         $this->assertDatabaseCount('source_messages', 2);
         $this->assertSame("Исправлено\n\nВторая часть", $first->fresh()->text);
-        $this->assertSame($channel->id, $first->source_channel_id);
+        $this->assertSame($channel->id, $first->source_id);
         $this->assertSame(1, $first->mediaAssets()->count());
         $this->assertSame(
             11,

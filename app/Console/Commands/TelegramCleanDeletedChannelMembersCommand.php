@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\SourceChannel;
+use App\Models\Source;
 use App\Models\TelegramAccount;
 use App\Models\TelegramOwnerCommand;
 use App\Services\TelegramOwnerCommandDispatcher;
@@ -38,7 +38,7 @@ class TelegramCleanDeletedChannelMembersCommand extends Command
             return self::FAILURE;
         }
 
-        $username = SourceChannel::normalizeUsername((string) $this->argument('channel'));
+        $username = Source::normalizeUsername((string) $this->argument('channel'));
 
         if (blank($username)) {
             $this->error('Укажите публичный username канала.');
