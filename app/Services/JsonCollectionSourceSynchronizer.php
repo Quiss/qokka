@@ -233,7 +233,7 @@ class JsonCollectionSourceSynchronizer
             ->withOptions(['allow_redirects' => false]);
 
         if ($source->authorization() !== null) {
-            $request->withHeaders(['Authorization' => $source->authorization()]);
+            $request->withHeaders(['Authorization' => 'Bearer ' . $source->authorization()]);
         }
 
         return $request;
