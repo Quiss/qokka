@@ -6,9 +6,13 @@ use App\Models\MediaAsset;
 use App\Models\SourcePost;
 use App\Services\MediaFileGarbageCollector;
 use App\Services\SourceUrlGuard;
+use GuzzleHttp\Exception\RequestException as GuzzleRequestException;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -54,10 +58,7 @@ class DownloadRemoteMediaAssetJob implements ShouldBeUnique, ShouldQueue
         }
 
         $urlGuard->ensurePublicHttps($remoteUrl);
-        $response = Http::connectTimeout((int) config('channelbot.sources.connect_timeout', 5))
-            ->timeout((int) config('channelbot.sources.media_timeout', 30))
-            ->withOptions(['allow_redirects' => false])
-            ->get($remoteUrl);
+        $response = $this->download($remoteUrl);
 
         if ($response->status() >= 300 && $response->status() < 400) {
             throw new RuntimeException('Редиректы при загрузке медиа запрещены.');
@@ -156,5 +157,36 @@ class DownloadRemoteMediaAssetJob implements ShouldBeUnique, ShouldQueue
         MediaAsset::query()
             ->where('origin_media_asset_id', $mediaAsset->id)
             ->update($values);
+    }
+
+    private function download(string $remoteUrl): Response
+    {
+        try {
+            return $this->request()->get($remoteUrl);
+        } catch (ConnectionException $exception) {
+            if (! $this->hasUnsupportedContentEncoding($exception)) {
+                throw $exception;
+            }
+
+            return $this->request(decodeContent: false)->get($remoteUrl);
+        }
+    }
+
+    private function request(bool $decodeContent = true): PendingRequest
+    {
+        return Http::connectTimeout((int) config('channelbot.sources.connect_timeout', 5))
+            ->timeout((int) config('channelbot.sources.media_timeout', 30))
+            ->withOptions([
+                'allow_redirects' => false,
+                'decode_content' => $decodeContent,
+            ]);
+    }
+
+    private function hasUnsupportedContentEncoding(ConnectionException $exception): bool
+    {
+        $previous = $exception->getPrevious();
+
+        return $previous instanceof GuzzleRequestException
+            && data_get($previous->getHandlerContext(), 'errno') === \CURLE_BAD_CONTENT_ENCODING;
     }
 }

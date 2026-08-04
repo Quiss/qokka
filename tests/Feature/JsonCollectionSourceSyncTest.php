@@ -5,12 +5,21 @@ namespace Tests\Feature;
 use App\Jobs\DownloadRemoteMediaAssetJob;
 use App\Jobs\SyncJsonCollectionSourceJob;
 use App\MediaType;
+use App\Models\ContentPlan;
+use App\Models\MediaAsset;
+use App\Models\PlannedPost;
 use App\Models\Source;
 use App\Models\SourcePost;
+use App\Models\StoryCandidate;
 use App\Services\JsonCollectionSourceSynchronizer;
 use App\Services\MediaFileGarbageCollector;
+use App\Services\PlannedPostMediaManager;
 use App\Services\SourceUrlGuard;
+use GuzzleHttp\Exception\RequestException as GuzzleRequestException;
+use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Psr7\Request as PsrRequest;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -144,7 +153,151 @@ class JsonCollectionSourceSyncTest extends TestCase
         Storage::disk('local')->assertExists($asset->path);
     }
 
-    public function test_sync_queues_at_most_ten_valid_https_covers(): void
+    public function test_remote_cover_retries_without_decoding_an_unsupported_content_encoding(): void
+    {
+        Http::preventStrayRequests();
+        Storage::fake('local');
+        $source = Source::factory()->jsonCollection()->create();
+        $post = SourcePost::factory()->create(['source_id' => $source->id]);
+        $asset = $post->mediaAssets()->create([
+            'ingest_key' => 'remote:work-1',
+            'external_id' => 'work-1',
+            'type' => MediaType::Photo,
+            'disk' => 'local',
+            'metadata' => [
+                'transport' => 'remote',
+                'remote_url' => 'https://93.184.216.34/images/work-1.jpg',
+            ],
+        ]);
+        $decodeContentOptions = [];
+        $attempt = 0;
+
+        Http::globalMiddleware(function (callable $handler) use (&$decodeContentOptions): callable {
+            return function ($request, array $options) use ($handler, &$decodeContentOptions) {
+                $decodeContentOptions[] = $options['decode_content'] ?? null;
+
+                return $handler($request, $options);
+            };
+        });
+        Http::fake(function (Request $request) use (&$attempt) {
+            $attempt++;
+
+            if ($attempt === 1) {
+                return Create::rejectionFor(new GuzzleRequestException(
+                    'cURL error 61: Unrecognized content encoding type.',
+                    new PsrRequest('GET', $request->url()),
+                    handlerContext: ['errno' => \CURLE_BAD_CONTENT_ENCODING],
+                ));
+            }
+
+            return Http::response(
+                'fake-jpeg-contents',
+                200,
+                ['Content-Type' => 'image/jpeg', 'Content-Encoding' => 'aws-chunked'],
+            );
+        });
+
+        (new DownloadRemoteMediaAssetJob($asset->id))->handle(
+            app(SourceUrlGuard::class),
+            app(MediaFileGarbageCollector::class),
+        );
+
+        $asset->refresh();
+
+        $this->assertSame([true, false], $decodeContentOptions);
+        $this->assertNotNull($asset->path);
+        $this->assertSame('image/jpeg', $asset->mime_type);
+        $this->assertNull($asset->failed_at);
+        Http::assertSentCount(2);
+        Storage::disk('local')->assertExists($asset->path);
+    }
+
+    public function test_remote_cover_does_not_retry_other_connection_errors(): void
+    {
+        Http::preventStrayRequests();
+        $source = Source::factory()->jsonCollection()->create();
+        $post = SourcePost::factory()->create(['source_id' => $source->id]);
+        $asset = $post->mediaAssets()->create([
+            'ingest_key' => 'remote:work-1',
+            'external_id' => 'work-1',
+            'type' => MediaType::Photo,
+            'disk' => 'local',
+            'metadata' => [
+                'transport' => 'remote',
+                'remote_url' => 'https://93.184.216.34/images/work-1.jpg',
+            ],
+        ]);
+        Http::fake(fn (Request $request) => Create::rejectionFor(new GuzzleRequestException(
+            'cURL error 28: Operation timed out.',
+            new PsrRequest('GET', $request->url()),
+            handlerContext: ['errno' => \CURLE_OPERATION_TIMEDOUT],
+        )));
+
+        try {
+            (new DownloadRemoteMediaAssetJob($asset->id))->handle(
+                app(SourceUrlGuard::class),
+                app(MediaFileGarbageCollector::class),
+            );
+            $this->fail('A non-encoding connection error should be rethrown.');
+        } catch (ConnectionException $exception) {
+            $this->assertStringContainsString('cURL error 28', $exception->getMessage());
+        }
+
+        Http::assertSentCount(1);
+        $this->assertNull($asset->fresh()->path);
+    }
+
+    public function test_sync_accepts_supported_image_keys_with_canonical_precedence(): void
+    {
+        Queue::fake();
+        $source = Source::factory()->jsonCollection()->create([
+            'endpoint_url' => 'https://93.184.216.34/api/v1/publications',
+        ]);
+        $payload = $this->payload();
+        $payload['collections'][0]['items'] = [
+            array_merge($this->validItem('image-key', ''), [
+                'image' => 'https://93.184.216.34/images/image-key.jpg',
+            ]),
+            array_merge($this->validItem('poster-key', ''), [
+                'poster' => 'https://93.184.216.34/images/poster-key.jpg',
+            ]),
+            array_merge($this->validItem('cover-key', ''), [
+                'cover_url' => 'https://93.184.216.34/images/cover-key.jpg',
+            ]),
+            array_merge($this->validItem(
+                'canonical-key',
+                'https://93.184.216.34/images/canonical.jpg',
+            ), [
+                'image' => 'https://93.184.216.34/images/image-alias.jpg',
+                'poster' => 'https://93.184.216.34/images/poster-alias.jpg',
+            ]),
+        ];
+        Http::fake([
+            'https://93.184.216.34/*' => Http::response($payload),
+        ]);
+
+        app(JsonCollectionSourceSynchronizer::class)->handle($source);
+
+        $post = SourcePost::query()->with('mediaAssets')->sole();
+        $expectedUrls = [
+            'https://93.184.216.34/images/image-key.jpg',
+            'https://93.184.216.34/images/poster-key.jpg',
+            'https://93.184.216.34/images/cover-key.jpg',
+            'https://93.184.216.34/images/canonical.jpg',
+        ];
+
+        $this->assertSame(
+            $expectedUrls,
+            $post->mediaAssets->sortBy('sort_order')->pluck('metadata.remote_url')->all(),
+        );
+        $this->assertSame(
+            $expectedUrls,
+            collect($post->collectionPayload()['items'])->pluck('image_url')->all(),
+        );
+        Queue::assertPushed(DownloadRemoteMediaAssetJob::class, 4);
+    }
+
+    public function test_sync_queues_all_valid_https_covers(): void
     {
         Queue::fake();
         $source = Source::factory()->jsonCollection()->create([
@@ -167,10 +320,71 @@ class JsonCollectionSourceSyncTest extends TestCase
 
         $post = SourcePost::query()->with('mediaAssets')->sole();
 
-        $this->assertCount(10, $post->mediaAssets);
-        $this->assertSame(range(0, 9), $post->mediaAssets->sortBy('sort_order')->pluck('sort_order')->all());
-        $this->assertSame(10, $summary['queued_covers']);
-        Queue::assertPushed(DownloadRemoteMediaAssetJob::class, 10);
+        $this->assertCount(11, $post->mediaAssets);
+        $this->assertSame(range(0, 10), $post->mediaAssets->sortBy('sort_order')->pluck('sort_order')->all());
+        $this->assertSame(11, $summary['queued_covers']);
+        Queue::assertPushed(DownloadRemoteMediaAssetJob::class, 11);
+    }
+
+    public function test_default_selection_uses_the_first_ten_source_images(): void
+    {
+        Queue::fake();
+        $sourcePost = SourcePost::factory()->create();
+        $sourceAssets = collect(range(0, 11))->map(
+            fn (int $sortOrder): MediaAsset => MediaAsset::factory()
+                ->for($sourcePost, 'mediable')
+                ->create(['sort_order' => $sortOrder]),
+        );
+        $contentPlan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $contentPlan->id]);
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $plannedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $contentPlan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+
+        app(PlannedPostMediaManager::class)->copyDefaultSelection($plannedPost, $candidate);
+
+        $selectedAssets = $plannedPost->mediaAssets()->orderBy('sort_order')->get();
+
+        $this->assertCount(10, $selectedAssets);
+        $this->assertSame(
+            $sourceAssets->take(10)->pluck('id')->all(),
+            $selectedAssets->pluck('origin_media_asset_id')->all(),
+        );
+    }
+
+    public function test_resync_requeues_a_previously_failed_cover(): void
+    {
+        Queue::fake();
+        $source = Source::factory()->jsonCollection()->create([
+            'endpoint_url' => 'https://93.184.216.34/api/v1/publications',
+        ]);
+        Http::fake([
+            'https://93.184.216.34/*' => Http::response($this->payload()),
+        ]);
+        $synchronizer = app(JsonCollectionSourceSynchronizer::class);
+        $summary = $synchronizer->handle($source);
+
+        $this->assertSame(1, $summary['queued_covers']);
+        $this->assertSame(1, MediaAsset::query()->count());
+        $asset = MediaAsset::query()->firstOrFail();
+        $asset->update([
+            'failed_at' => now(),
+            'metadata' => array_merge($asset->metadata, ['download_error' => 'Previous failure']),
+        ]);
+        Queue::fake();
+
+        $synchronizer->handle($source->fresh());
+
+        $asset->refresh();
+
+        $this->assertNull($asset->failed_at);
+        $this->assertArrayNotHasKey('download_error', $asset->metadata);
+        Queue::assertPushed(
+            DownloadRemoteMediaAssetJob::class,
+            fn (DownloadRemoteMediaAssetJob $job): bool => $job->mediaAssetId === $asset->id,
+        );
     }
 
     public function test_sync_job_records_invalid_contract_error(): void

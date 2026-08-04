@@ -30,6 +30,7 @@ class PlannedPostMediaManager
 
         $sourceAssetIds = $primarySource->mediaAssets
             ->whereIn('type', MediaType::publishableCases())
+            ->take(10)
             ->map(fn (MediaAsset $mediaAsset): int => $mediaAsset->id)
             ->values()
             ->all();

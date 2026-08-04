@@ -37,7 +37,6 @@ class JsonCollectionSourceSynchronizer
                 'hours' => $source->lookbackHours(),
                 'limit' => $source->requestLimit(),
             ]);
-        \Log::info($endpointUrl, $source->credentials);
 
         if ($response->status() >= 300 && $response->status() < 400) {
             throw new RuntimeException('Редиректы endpoint источника запрещены.');
@@ -148,10 +147,6 @@ class JsonCollectionSourceSynchronizer
                         continue;
                     }
 
-                    if ($coverSortOrder >= 10) {
-                        break;
-                    }
-
                     $ingestKey = 'remote:'.$item['work_id'];
                     $wantedIngestKeys[] = $ingestKey;
                     $mediaAsset = $remoteAssets->get($ingestKey)
@@ -196,7 +191,13 @@ class JsonCollectionSourceSynchronizer
 
                 $staleMediaIds = array_merge(
                     $staleMediaIds,
-                    $remoteAssets->except($wantedIngestKeys)->modelKeys(),
+                    $remoteAssets
+                        ->reject(fn (MediaAsset $mediaAsset): bool => in_array(
+                            $mediaAsset->ingest_key,
+                            $wantedIngestKeys,
+                            true,
+                        ))
+                        ->modelKeys(),
                 );
             }
 
@@ -364,7 +365,7 @@ class JsonCollectionSourceSynchronizer
             'rating' => $normalizedRating,
             'ratings' => is_array($rawItem['ratings'] ?? null) ? $rawItem['ratings'] : [],
             'external_ids' => is_array($rawItem['external_ids'] ?? null) ? $rawItem['external_ids'] : [],
-            'image_url' => $this->firstString($rawItem, ['image_url', 'cover_url']),
+            'image_url' => $this->firstString($rawItem, ['image_url', 'image', 'poster', 'cover_url']),
             'url' => is_string($itemUrl) ? $itemUrl : null,
             'posted' => $this->firstString($rawItem, ['posted', 'published_at', 'pub_date']),
             'duration_minutes' => is_numeric($rawItem['duration_minutes'] ?? null)
