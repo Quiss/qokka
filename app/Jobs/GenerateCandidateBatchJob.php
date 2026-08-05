@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Actions\GenerateCandidateBatch;
 use App\ContentPlanStatus;
+use App\Jobs\Concerns\UsesFallbackModelOnFinalAttempt;
 use App\Models\ContentPlan;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -13,6 +14,7 @@ use Throwable;
 class GenerateCandidateBatchJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+    use UsesFallbackModelOnFinalAttempt;
 
     /**
      * Create a new job instance.
@@ -36,7 +38,10 @@ class GenerateCandidateBatchJob implements ShouldBeUnique, ShouldQueue
      */
     public function handle(GenerateCandidateBatch $generateCandidateBatch): void
     {
-        $generateCandidateBatch->handle(ContentPlan::query()->findOrFail($this->contentPlanId));
+        $generateCandidateBatch->handle(
+            ContentPlan::query()->findOrFail($this->contentPlanId),
+            useFallbackModel: $this->shouldUseFallbackModel(),
+        );
     }
 
     public function failed(?Throwable $exception): void

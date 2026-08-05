@@ -28,6 +28,7 @@ class PublicationFactory extends Factory
             'timezone' => 'Europe/Moscow',
             'tone_prompt' => 'Пиши динамично, ясно и без канцелярита.',
             'selection_prompt' => null,
+            'advertising_description' => 'Канал для активной аудитории, которая хочет быстро получать полезные и понятные материалы по теме.',
             'content_filters' => [],
             'planning_time' => '18:00',
             'safety_net_enabled' => true,

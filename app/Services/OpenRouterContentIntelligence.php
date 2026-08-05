@@ -3,12 +3,13 @@
 namespace App\Services;
 
 use App\AiOperation;
-use App\Contracts\ContentIntelligence;
+use App\Contracts\FallbackContentIntelligence;
 use App\MediaType;
 use App\Models\AiRun;
 use App\Models\ContentPlan;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
+use App\Models\Publication;
 use App\Models\SourcePost;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -36,7 +37,7 @@ use Throwable;
  * }
  * @phpstan-type RankingResult array{clusters: list<RankingCluster>}
  */
-class OpenRouterContentIntelligence implements ContentIntelligence
+class OpenRouterContentIntelligence implements FallbackContentIntelligence
 {
     public function __construct(
         private readonly RecentPublicationHistory $recentPublicationHistory,
@@ -44,7 +45,21 @@ class OpenRouterContentIntelligence implements ContentIntelligence
 
     public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
     {
+        return $this->rankAndClusterUsingConfiguredModel($contentPlan, $sourcePosts);
+    }
+
+    public function rankAndClusterWithFallback(ContentPlan $contentPlan, Collection $sourcePosts): array
+    {
+        return $this->rankAndClusterUsingConfiguredModel($contentPlan, $sourcePosts, true);
+    }
+
+    private function rankAndClusterUsingConfiguredModel(
+        ContentPlan $contentPlan,
+        Collection $sourcePosts,
+        bool $useFallbackModel = false,
+    ): array {
         $publication = $contentPlan->publication;
+        $model = $this->analysisModel($publication, $useFallbackModel);
         $recentCommittedPosts = $this->recentPublicationHistory->forPlan($contentPlan);
         $rankingData = [
             ...$this->temporalPlanContext($contentPlan),
@@ -105,7 +120,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $draft = $this->rankingResult($this->execute(
             $contentPlan,
             AiOperation::RankAndCluster,
-            $publication->analysis_model ?: config('services.openrouter.analysis_model'),
+            $model,
             [$this->systemMessage('Ты редактор русскоязычного новостного канала. Не выдумывай факты.'), $prompt],
             $this->rankingSchema(),
             'v6',
@@ -119,15 +134,29 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $contentPlan,
             $sourcePosts,
             $draft,
-            $publication->analysis_model ?: config('services.openrouter.analysis_model'),
+            $model,
         );
     }
 
     public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
     {
+        return $this->rewriteUsingConfiguredModel($plannedPost, $instruction);
+    }
+
+    public function rewriteWithFallback(PlannedPost $plannedPost, ?string $instruction = null): array
+    {
+        return $this->rewriteUsingConfiguredModel($plannedPost, $instruction, true);
+    }
+
+    private function rewriteUsingConfiguredModel(
+        PlannedPost $plannedPost,
+        ?string $instruction = null,
+        bool $useFallbackModel = false,
+    ): array {
         $plannedPost->loadMissing('contentPlan.publication.destination', 'storyCandidate.sourcePosts.source', 'storyCandidate.sourcePosts.mediaAssets');
         $candidate = $plannedPost->storyCandidate;
         $publication = $plannedPost->contentPlan->publication;
+        $model = $this->rewriteModel($publication, $useFallbackModel);
         $signature = $publication->signatureMarkdown($publication->destination);
         $publicationMoment = $plannedPost->scheduled_at?->setTimezone($publication->timezone);
         $recentPosts = PlannedPost::query()
@@ -187,7 +216,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $result = $this->rewriteResult($this->execute(
             $plannedPost,
             AiOperation::Rewrite,
-            $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
+            $model,
             [$this->systemMessage('Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.'), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
             'v6',
@@ -200,7 +229,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         $corrected = $this->rewriteResult($this->execute(
             $plannedPost,
             AiOperation::Rewrite,
-            $publication->rewrite_model ?: config('services.openrouter.rewrite_model'),
+            $model,
             [
                 $this->systemMessage('Исправь только подпись готового поста. Не меняй факты, стиль и остальной текст.'),
                 ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
@@ -222,6 +251,18 @@ class OpenRouterContentIntelligence implements ContentIntelligence
 
     public function reviewPlan(ContentPlan $contentPlan): array
     {
+        return $this->reviewPlanUsingConfiguredModel($contentPlan);
+    }
+
+    public function reviewPlanWithFallback(ContentPlan $contentPlan): array
+    {
+        return $this->reviewPlanUsingConfiguredModel($contentPlan, true);
+    }
+
+    private function reviewPlanUsingConfiguredModel(
+        ContentPlan $contentPlan,
+        bool $useFallbackModel = false,
+    ): array {
         $contentPlan->loadMissing('publication', 'plannedPosts.storyCandidate.sourcePosts.source');
         $items = $contentPlan->plannedPosts->map(fn ($post): array => [
             'planned_post_id' => $post->id,
@@ -246,7 +287,7 @@ class OpenRouterContentIntelligence implements ContentIntelligence
         return $this->reviewResult($this->execute(
             $contentPlan,
             AiOperation::ReviewPlan,
-            $contentPlan->publication->analysis_model ?: config('services.openrouter.analysis_model'),
+            $this->analysisModel($contentPlan->publication, $useFallbackModel),
             [
                 $this->systemMessage('Ты выпускающий редактор. Блокируй дубли, противоречия, недостоверные формулировки и нежелательный контент.'),
                 ['role' => 'user', 'content' => 'Проверь план целиком и верни риски для каждого поста и группы смысловых дублей. '
@@ -261,6 +302,24 @@ class OpenRouterContentIntelligence implements ContentIntelligence
             $this->reviewSchema(),
             'v6',
         ));
+    }
+
+    private function analysisModel(Publication $publication, bool $useFallbackModel): string
+    {
+        if ($useFallbackModel && filled(config('services.openrouter.analysis_fallback_model'))) {
+            return (string) config('services.openrouter.analysis_fallback_model');
+        }
+
+        return (string) ($publication->analysis_model ?: config('services.openrouter.analysis_model'));
+    }
+
+    private function rewriteModel(Publication $publication, bool $useFallbackModel): string
+    {
+        if ($useFallbackModel && filled(config('services.openrouter.rewrite_fallback_model'))) {
+            return (string) config('services.openrouter.rewrite_fallback_model');
+        }
+
+        return (string) ($publication->rewrite_model ?: config('services.openrouter.rewrite_model'));
     }
 
     /**

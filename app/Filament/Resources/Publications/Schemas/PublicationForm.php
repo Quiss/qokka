@@ -56,6 +56,16 @@ class PublicationForm
                             ->autosize()
                             ->trim()
                             ->columnSpanFull(),
+                        Textarea::make('advertising_description')
+                            ->label('Описание канала для рекламы')
+                            ->helperText('Заполните один раз: тематика, аудитория, ценность подписки и конкретные примеры контента. Эти данные будут автоматически использоваться генератором рекламных постов.')
+                            ->placeholder('Например: канал для предпринимателей 25–45 лет о практическом применении AI. Подписчики получают короткие разборы инструментов, готовые сценарии автоматизации и честные сравнения сервисов.')
+                            ->rows(6)
+                            ->autosize()
+                            ->maxLength(10000)
+                            ->trim()
+                            ->required()
+                            ->columnSpanFull(),
                         Textarea::make('tone_prompt')
                             ->label('Редакционная инструкция для AI')
                             ->afterLabel(PublicationToneGenerationAction::make())

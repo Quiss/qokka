@@ -10,4 +10,5 @@ enum AiOperation: string
     case ReviewPlan = 'review_plan';
     case AnalyzeImage = 'analyze_image';
     case GenerateTone = 'generate_tone';
+    case GenerateAdvertisingPost = 'generate_advertising_post';
 }

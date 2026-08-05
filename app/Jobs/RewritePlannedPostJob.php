@@ -4,6 +4,8 @@ namespace App\Jobs;
 
 use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
+use App\Contracts\FallbackContentIntelligence;
+use App\Jobs\Concerns\UsesFallbackModelOnFinalAttempt;
 use App\Models\PlannedPost;
 use App\Models\PlannedPostRevision;
 use App\PlannedPostStatus;
@@ -16,6 +18,7 @@ use Throwable;
 class RewritePlannedPostJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+    use UsesFallbackModelOnFinalAttempt;
 
     public int $tries = 3;
 
@@ -47,7 +50,9 @@ class RewritePlannedPostJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $result = $contentIntelligence->rewrite($plannedPost, $this->instruction);
+        $result = $this->shouldUseFallbackModel() && $contentIntelligence instanceof FallbackContentIntelligence
+            ? $contentIntelligence->rewriteWithFallback($plannedPost, $this->instruction)
+            : $contentIntelligence->rewrite($plannedPost, $this->instruction);
         $applied = DB::transaction(function () use ($result): ?PlannedPost {
             $lockedPost = PlannedPost::query()
                 ->with('storyCandidate')

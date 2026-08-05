@@ -22,6 +22,7 @@ use Illuminate\Support\Str;
  * @property string $timezone
  * @property string $tone_prompt
  * @property string|null $selection_prompt
+ * @property string|null $advertising_description
  * @property list<string>|null $tone_examples
  * @property list<string>|null $forbidden_phrases
  * @property array<string, mixed>|null $content_filters
@@ -44,7 +45,7 @@ use Illuminate\Support\Str;
  * @property-read Collection<int, Destination> $destinations
  * @property-read Destination|null $destination
  */
-#[Fillable(['source_group_id', 'name', 'slug', 'language', 'timezone', 'tone_prompt', 'selection_prompt', 'tone_examples', 'forbidden_phrases', 'content_filters', 'analysis_model', 'rewrite_model', 'planning_time', 'safety_net_enabled', 'safety_net_cutoff_time', 'publish_window_start', 'publish_window_end', 'min_interval_minutes', 'max_interval_minutes', 'reserve_multiplier', 'media_caption_limit', 'show_source_attribution', 'signature_mode', 'signature_label', 'is_active'])]
+#[Fillable(['source_group_id', 'name', 'slug', 'language', 'timezone', 'tone_prompt', 'selection_prompt', 'advertising_description', 'tone_examples', 'forbidden_phrases', 'content_filters', 'analysis_model', 'rewrite_model', 'planning_time', 'safety_net_enabled', 'safety_net_cutoff_time', 'publish_window_start', 'publish_window_end', 'min_interval_minutes', 'max_interval_minutes', 'reserve_multiplier', 'media_caption_limit', 'show_source_attribution', 'signature_mode', 'signature_label', 'is_active'])]
 class Publication extends Model
 {
     /** @use HasFactory<PublicationFactory> */

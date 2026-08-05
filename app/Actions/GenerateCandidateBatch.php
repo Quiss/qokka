@@ -5,6 +5,7 @@ namespace App\Actions;
 use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
+use App\Contracts\FallbackContentIntelligence;
 use App\Filament\Resources\ContentPlans\ContentPlanResource;
 use App\MediaType;
 use App\Models\ContentPlan;
@@ -32,6 +33,7 @@ class GenerateCandidateBatch
         bool $append = false,
         int $lookbackHours = 24,
         ?int $targetOverride = null,
+        bool $useFallbackModel = false,
     ): ContentPlan {
         $contentPlan->loadMissing('publication.sourceGroup.sources');
 
@@ -112,7 +114,9 @@ class GenerateCandidateBatch
             return $freshContentPlan;
         }
 
-        $result = $this->contentIntelligence->rankAndCluster($contentPlan, $posts);
+        $result = $useFallbackModel && $this->contentIntelligence instanceof FallbackContentIntelligence
+            ? $this->contentIntelligence->rankAndClusterWithFallback($contentPlan, $posts)
+            : $this->contentIntelligence->rankAndCluster($contentPlan, $posts);
         $allowedIds = $posts->pluck('id')->flip();
         $postsById = $posts->keyBy('id');
         $olderPostIds = $posts

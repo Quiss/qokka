@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Actions\GenerateCandidateBatch;
 use App\ContentPlanStatus;
+use App\Jobs\Concerns\UsesFallbackModelOnFinalAttempt;
 use App\Models\ContentPlan;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -13,6 +14,7 @@ use Throwable;
 class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+    use UsesFallbackModelOnFinalAttempt;
 
     public int $tries = 3;
 
@@ -37,7 +39,14 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
     {
         $plan = ContentPlan::query()->findOrFail($this->contentPlanId);
         $before = $plan->storyCandidates()->count();
-        $generateCandidateBatch->handle($plan, append: true, lookbackHours: 24, targetOverride: $this->candidateTarget);
+        $useFallbackModel = $this->shouldUseFallbackModel();
+        $generateCandidateBatch->handle(
+            $plan,
+            append: true,
+            lookbackHours: 24,
+            targetOverride: $this->candidateTarget,
+            useFallbackModel: $useFallbackModel,
+        );
         $created = $plan->storyCandidates()->count() - $before;
 
         if ($this->extendLookback && $created < $this->candidateTarget) {
@@ -46,6 +55,7 @@ class ReplenishContentPlanCandidatesJob implements ShouldBeUnique, ShouldQueue
                 append: true,
                 lookbackHours: 48,
                 targetOverride: $this->candidateTarget - $created,
+                useFallbackModel: $useFallbackModel,
             );
         }
 

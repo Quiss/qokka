@@ -4,6 +4,8 @@ namespace App\Jobs;
 
 use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
+use App\Contracts\FallbackContentIntelligence;
+use App\Jobs\Concerns\UsesFallbackModelOnFinalAttempt;
 use App\Models\ContentPlan;
 use App\PlannedPostStatus;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -14,6 +16,7 @@ use Throwable;
 class ReviewContentPlanJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+    use UsesFallbackModelOnFinalAttempt;
 
     /**
      * Create a new job instance.
@@ -44,7 +47,9 @@ class ReviewContentPlanJob implements ShouldBeUnique, ShouldQueue
         $contentPlan = ContentPlan::query()
             ->with(['plannedPosts' => fn ($query) => $query->where('status', '!=', PlannedPostStatus::Cancelled)])
             ->findOrFail($this->contentPlanId);
-        $result = $contentIntelligence->reviewPlan($contentPlan);
+        $result = $this->shouldUseFallbackModel() && $contentIntelligence instanceof FallbackContentIntelligence
+            ? $contentIntelligence->reviewPlanWithFallback($contentPlan)
+            : $contentIntelligence->reviewPlan($contentPlan);
         $duplicateIds = collect($result['duplicate_groups'] ?? [])->flatten()->map(fn ($id): int => (int) $id)->flip();
 
         $reviews = collect($result['items'])->keyBy('planned_post_id');
