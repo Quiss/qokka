@@ -103,6 +103,44 @@ class JsonCollectionSourceSyncTest extends TestCase
         $this->assertSame(1, $summary['skipped_collections']);
     }
 
+    public function test_same_work_can_belong_to_multiple_collections_and_resync_idempotently(): void
+    {
+        Queue::fake();
+        $source = Source::factory()->jsonCollection()->create([
+            'endpoint_url' => 'https://93.184.216.34/api/v1/publications',
+        ]);
+        $payload = $this->payload();
+        $secondCollection = $payload['collections'][0];
+        $secondCollection['collection_id'] = 'collection-2';
+        $secondCollection['title'] = 'Другая подборка';
+        $payload['collections'][] = $secondCollection;
+        Http::fake([
+            'https://93.184.216.34/*' => Http::response($payload),
+        ]);
+        $synchronizer = app(JsonCollectionSourceSynchronizer::class);
+
+        $synchronizer->handle($source);
+
+        $assets = MediaAsset::query()
+            ->where('ingest_key', 'remote:work-1')
+            ->orderBy('id')
+            ->get();
+        $originalAssetIds = $assets->modelKeys();
+
+        $this->assertCount(2, $assets);
+        $this->assertCount(2, $assets->pluck('mediable_id')->unique());
+        Queue::assertPushed(DownloadRemoteMediaAssetJob::class, 2);
+
+        $synchronizer->handle($source->fresh());
+
+        $this->assertSame(2, SourcePost::query()->count());
+        $this->assertSame(2, MediaAsset::query()->count());
+        $this->assertSame(
+            $originalAssetIds,
+            MediaAsset::query()->orderBy('id')->get()->modelKeys(),
+        );
+    }
+
     public function test_source_and_media_urls_must_be_public_https_without_redirects(): void
     {
         Http::preventStrayRequests();
