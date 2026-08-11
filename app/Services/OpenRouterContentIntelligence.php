@@ -159,6 +159,11 @@ class OpenRouterContentIntelligence implements FallbackContentIntelligence
         $model = $this->rewriteModel($publication, $useFallbackModel);
         $signature = $publication->signatureMarkdown($publication->destination);
         $publicationMoment = $plannedPost->scheduled_at?->setTimezone($publication->timezone);
+        $publicationCalendar = [
+            'scheduled_at' => $publicationMoment?->toIso8601String(),
+            'local_date' => $publicationMoment?->toDateString(),
+            'timezone' => $publication->timezone,
+        ];
         $recentPosts = PlannedPost::query()
             ->where('id', '<>', $plannedPost->id)
             ->whereNotNull('text')
@@ -173,25 +178,35 @@ class OpenRouterContentIntelligence implements FallbackContentIntelligence
             ->map(fn (string $text): string => Str::limit($text, 600))
             ->values()
             ->all();
-        $sources = $candidate->sourcePosts->map(fn ($post): array => [
-            'source_post_id' => $post->id,
-            'source' => $post->source->title,
-            'source_type' => $post->source->type->value,
-            'content_kind' => $post->isCollection() ? 'collection' : 'article',
-            'text' => $post->text,
-            'structured_content' => $post->collectionPayload(),
-            'posted_at' => $post->posted_at->toIso8601String(),
-        ])->all();
+        $sources = $candidate->sourcePosts->map(function (SourcePost $post) use ($publication): array {
+            $postedAtLocal = CarbonImmutable::instance($post->posted_at)->setTimezone($publication->timezone);
+
+            return [
+                'source_post_id' => $post->id,
+                'source' => $post->source->title,
+                'source_type' => $post->source->type->value,
+                'content_kind' => $post->isCollection() ? 'collection' : 'article',
+                'text' => $post->text,
+                'structured_content' => $post->collectionPayload(),
+                'posted_at' => $post->posted_at->toIso8601String(),
+                'posted_at_local' => $postedAtLocal->toIso8601String(),
+                'relative_dates' => [
+                    'вчера' => $postedAtLocal->subDay()->toDateString(),
+                    'сегодня' => $postedAtLocal->toDateString(),
+                    'завтра' => $postedAtLocal->addDay()->toDateString(),
+                    'послезавтра' => $postedAtLocal->addDays(2)->toDateString(),
+                ],
+            ];
+        })->all();
         $content = [[
             'type' => 'text',
             'text' => 'Перепиши инфоповод в готовый самостоятельный Telegram-пост. Не указывай источники и не добавляй неподтвержденные факты. '
                 .'Используй только согласованные или однозначно подтвержденные сведения. Противоречивые детали не включай в текст и добавь риск source_conflict. '
                 .'Если источник содержит content_kind=collection, создай один пост по всей подборке и упомяни каждый item; не разделяй подборку и не выдумывай отсутствующие факты или поля. '
-                .'Плановая публикация: '.($publicationMoment?->toIso8601String() ?? 'не задана').", часовой пояс: {$publication->timezone}. "
+                .'Календарный контекст публикации уже вычислен, не пересчитывай его самостоятельно: '
+                .json_encode($publicationCalendar, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '
                 .'Проверь, будет ли инфоповод актуален в этот момент. Если прогноз, ограничение, отключение, расписание, анонс или другая оперативная информация относится к уже прошедшей дате, не подменяй дату и добавь риск stale_at_publication. '
-                .'Слова «сегодня», «завтра» и подобные в источниках трактуй относительно posted_at источника, а в готовом тексте используй только тогда, когда они однозначно верны для момента публикации. '
-                .'Разрешена обычная разметка Markdown: **жирный**, *курсив*, ~~зачеркнутый~~, [текст](https://example.com) и отдельная цитата в формате > текст. Другие конструкции Markdown не используй. '
-                .'Цитируй только слова, которые дословно присутствуют в материалах; не придумывай цитаты и не превращай пересказ в прямую речь. '
+                .'Для относительных дат из источника используй только готовое соответствие relative_dates этого источника. '
                 .(filled($instruction) ? 'Разовая дополнительная инструкция редактора для этого рерайта: '.$instruction.'. При конфликте стилевых требований она имеет приоритет над постоянной инструкцией канала. ' : '')
                 ."Язык: {$publication->language}. Редакционная инструкция канала — единственный источник постоянных требований к тону, объему, структуре, началу и финалу, заголовкам, акцентам, цитатам, эмодзи и юмору: {$publication->tone_prompt}. "
                 .'Если редакционная инструкция не регулирует отдельный стилевой параметр, выбери его по смыслу конкретной новости. Примеры желаемого текста (это ориентиры, не шаблоны и не источники фактов): '
@@ -217,9 +232,9 @@ class OpenRouterContentIntelligence implements FallbackContentIntelligence
             $plannedPost,
             AiOperation::Rewrite,
             $model,
-            [$this->systemMessage('Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.'), ['role' => 'user', 'content' => $content]],
+            [$this->systemMessage($this->rewriteSystemPrompt()), ['role' => 'user', 'content' => $content]],
             $this->rewriteSchema(),
-            'v6',
+            'v7',
         ));
 
         if ($this->hasExpectedSignature($result['text'], $signature)) {
@@ -231,11 +246,11 @@ class OpenRouterContentIntelligence implements FallbackContentIntelligence
             AiOperation::Rewrite,
             $model,
             [
-                $this->systemMessage('Исправь только подпись готового поста. Не меняй факты, стиль и остальной текст.'),
+                $this->systemMessage($this->rewriteSystemPrompt()."\n\nИсправь только подпись готового поста. Не меняй факты, стиль и остальной текст."),
                 ['role' => 'user', 'content' => 'Текст: '.json_encode($result['text'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR).'. '.$this->signatureInstruction($signature)],
             ],
             $this->rewriteSchema(),
-            'v6',
+            'v7',
         ));
 
         if (! $this->hasExpectedSignature($corrected['text'], $signature)) {
@@ -528,6 +543,34 @@ class OpenRouterContentIntelligence implements FallbackContentIntelligence
     private function systemMessage(string $content): array
     {
         return ['role' => 'system', 'content' => $content];
+    }
+
+    private function rewriteSystemPrompt(): string
+    {
+        return <<<'PROMPT'
+Ты редактор Telegram-канала. Строго следуй редакционной инструкции конкретного канала, сохраняя подтвержденные факты и смысл.
+
+Календарные правила обязательны:
+- В готовом посте используй только абсолютные календарные даты вида «13 августа» или «13 августа 2026 года».
+- Не используй «сегодня», «завтра», «послезавтра», «вчера», «накануне», «через N дней», «на этой неделе», «на следующей неделе» и другие относительные календарные формулировки.
+- Не используй день недели как замену календарной дате и не добавляй день недели рядом с датой.
+- Если источник использует относительную дату, бери абсолютную дату только из его поля relative_dates. Не вычисляй дату самостоятельно.
+- Если точную дату нельзя однозначно подтвердить по данным, опусти календарную формулировку. Не исправляй и не дополняй дату догадкой.
+
+Используй безопасный Telegram Markdown, когда он улучшает читаемость поста:
+- **жирный**;
+- *курсив*;
+- ++подчеркнутый++;
+- ~~зачеркнутый~~;
+- ||спойлер||;
+- [текст ссылки](https://example.com);
+- `моноширинный текст` и блок кода между тройными обратными кавычками;
+- обычная цитата, где каждая строка начинается с `>`;
+- сворачиваемая цитата, где первая строка имеет вид `> [!EXPANDABLE]`, а следующие строки также начинаются с `>`;
+- маркированные списки через `-` и нумерованные списки через `1.`.
+
+Разметка не обязательна в каждом посте: применяй только уместные элементы и не оформляй весь текст одним акцентом. Не используй сырой HTML, изображения, таблицы, заголовки Markdown и горизонтальные разделители. Цитируй только слова, которые дословно присутствуют в материалах; не придумывай цитаты и не превращай пересказ в прямую речь.
+PROMPT;
     }
 
     private function signatureInstruction(?string $signature): string

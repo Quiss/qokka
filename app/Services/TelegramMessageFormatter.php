@@ -11,10 +11,12 @@ class TelegramMessageFormatter
 {
     public function toHtml(string $markdown): string
     {
-        $commonMarkHtml = Str::markdown($markdown, [
+        [$preparedMarkdown, $formatTokens] = $this->prepareMarkdown($markdown);
+        $commonMarkHtml = Str::markdown($preparedMarkdown, [
             'html_input' => 'strip',
             'allow_unsafe_links' => false,
         ]);
+        $commonMarkHtml = str_replace(array_keys($formatTokens), array_values($formatTokens), $commonMarkHtml);
         $document = new DOMDocument('1.0', 'UTF-8');
         $previousLibxmlState = libxml_use_internal_errors(true);
         $document->loadHTML(
@@ -128,19 +130,87 @@ class TelegramMessageFormatter
             return $this->renderOrderedList($node);
         }
 
+        if ($node->tagName === 'ul') {
+            return $this->renderUnorderedList($node);
+        }
+
         $contents = $this->renderChildren($node);
 
         return match ($node->tagName) {
             'strong', 'b' => '<b>'.$contents.'</b>',
             'em', 'i' => '<i>'.$contents.'</i>',
+            'u' => '<u>'.$contents.'</u>',
             'del', 's' => '<s>'.$contents.'</s>',
+            'tg-spoiler' => '<tg-spoiler>'.$contents.'</tg-spoiler>',
             'a' => $this->renderLink($node, $contents),
+            'code' => $this->renderCode($node, $contents),
+            'pre' => '<pre>'.$contents."</pre>\n\n",
             'br' => "\n",
-            'blockquote' => '<blockquote>'.trim($contents)."</blockquote>\n\n",
+            'blockquote' => $this->renderBlockquote($contents),
             'p', 'div', 'section', 'article', 'li' => $contents."\n\n",
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6' => '<b>'.$contents."</b>\n\n",
             default => $contents,
         };
+    }
+
+    /** @return array{string, array<string, string>} */
+    private function prepareMarkdown(string $markdown): array
+    {
+        $marker = 'TELEGRAMFORMAT'.Str::random(24);
+        $codeSegments = [];
+        $protectedMarkdown = preg_replace_callback(
+            '/```[\s\S]*?```|`[^`\n]*`/u',
+            function (array $matches) use (&$codeSegments, $marker): string {
+                $token = $marker.'CODE'.count($codeSegments);
+                $codeSegments[$token] = $matches[0];
+
+                return $token;
+            },
+            $markdown,
+        ) ?? $markdown;
+        $formatTokens = [
+            $marker.'UNDERLINEOPEN' => '<u>',
+            $marker.'UNDERLINECLOSE' => '</u>',
+            $marker.'SPOILEROPEN' => '<tg-spoiler>',
+            $marker.'SPOILERCLOSE' => '</tg-spoiler>',
+        ];
+        $protectedMarkdown = preg_replace_callback(
+            '/(?<!\+)\+\+(?!\s)(.+?)(?<!\s)\+\+(?!\+)/u',
+            fn (array $matches): string => $marker.'UNDERLINEOPEN'.$matches[1].$marker.'UNDERLINECLOSE',
+            $protectedMarkdown,
+        ) ?? $protectedMarkdown;
+        $protectedMarkdown = preg_replace_callback(
+            '/(?<!\|)\|\|(?!\s)(.+?)(?<!\s)\|\|(?!\|)/u',
+            fn (array $matches): string => $marker.'SPOILEROPEN'.$matches[1].$marker.'SPOILERCLOSE',
+            $protectedMarkdown,
+        ) ?? $protectedMarkdown;
+
+        return [str_replace(array_keys($codeSegments), array_values($codeSegments), $protectedMarkdown), $formatTokens];
+    }
+
+    private function renderBlockquote(string $contents): string
+    {
+        $contents = trim($contents);
+        $expandableContents = preg_replace('/^\[!EXPANDABLE\]\s*/u', '', $contents, 1, $replacements);
+
+        if ($replacements === 1 && is_string($expandableContents)) {
+            return '<blockquote expandable>'.$expandableContents."</blockquote>\n\n";
+        }
+
+        return '<blockquote>'.$contents."</blockquote>\n\n";
+    }
+
+    private function renderCode(DOMElement $node, string $contents): string
+    {
+        $class = $node->getAttribute('class');
+
+        if ($node->parentNode instanceof DOMElement
+            && $node->parentNode->tagName === 'pre'
+            && preg_match('/^language-[A-Za-z0-9_+\-]+$/', $class) === 1) {
+            return '<code class="'.htmlspecialchars($class, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'">'.$contents.'</code>';
+        }
+
+        return '<code>'.$contents.'</code>';
     }
 
     private function renderOrderedList(DOMElement $node): string
@@ -157,6 +227,21 @@ class TelegramMessageFormatter
 
             $items[] = $number.'. '.trim($this->renderChildren($child));
             $number++;
+        }
+
+        return implode("\n", $items)."\n\n";
+    }
+
+    private function renderUnorderedList(DOMElement $node): string
+    {
+        $items = [];
+
+        foreach ($node->childNodes as $child) {
+            if (! $child instanceof DOMElement || $child->tagName !== 'li') {
+                continue;
+            }
+
+            $items[] = '• '.trim($this->renderChildren($child));
         }
 
         return implode("\n", $items)."\n\n";

@@ -44,7 +44,7 @@ class TelegramPublisherTest extends TestCase
         $post = PlannedPost::factory()->create([
             'content_plan_id' => $plan->id,
             'story_candidate_id' => $candidate->id,
-            'text' => "**Готовый** пост\n\n> Подтвержденная цитата",
+            'text' => "**Готовый** ++пост++ с ||деталью||\n\n> [!EXPANDABLE]\n> Подтвержденная цитата",
         ]);
         $delivery = Delivery::factory()->create(['planned_post_id' => $post->id, 'destination_id' => $destination->id]);
 
@@ -53,7 +53,7 @@ class TelegramPublisherTest extends TestCase
         $this->assertSame(['321'], $result['message_ids']);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://tgprx.orangepanda.ru/bottest-token/sendMessage'
             && $request['chat_id'] === '@poka_trend'
-            && $request['text'] === "<b>Готовый</b> пост\n\n<blockquote>Подтвержденная цитата</blockquote>"
+            && $request['text'] === "<b>Готовый</b> <u>пост</u> с <tg-spoiler>деталью</tg-spoiler>\n\n<blockquote expandable>Подтвержденная цитата</blockquote>"
             && $request['parse_mode'] === 'HTML');
     }
 

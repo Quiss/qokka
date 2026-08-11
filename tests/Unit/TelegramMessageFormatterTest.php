@@ -47,6 +47,46 @@ class TelegramMessageFormatterTest extends TestCase
         );
     }
 
+    public function test_it_converts_telegram_inline_styles_and_keeps_code_literal(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml(
+            '++Подчеркнуто **жирно**++ и ||секрет *курсивом*||, но ~~удалено~~ и `a < b || c`.',
+        );
+
+        $this->assertSame(
+            '<u>Подчеркнуто <b>жирно</b></u> и <tg-spoiler>секрет <i>курсивом</i></tg-spoiler>, но <s>удалено</s> и <code>a &lt; b || c</code>.',
+            $html,
+        );
+    }
+
+    public function test_it_converts_fenced_code_with_a_safe_language(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml("```php\nif (\$count < 2) {\n    return;\n}\n```");
+
+        $this->assertSame(
+            "<pre><code class=\"language-php\">if (\$count &lt; 2) {\n    return;\n}\n</code></pre>",
+            $html,
+        );
+    }
+
+    public function test_it_converts_expandable_quotes_and_unordered_lists(): void
+    {
+        $formatter = new TelegramMessageFormatter;
+
+        $html = $formatter->toHtml(
+            "> [!EXPANDABLE]\n> Первая строка.\n> Вторая строка.\n\n- Один\n- **Два**",
+        );
+
+        $this->assertSame(
+            "<blockquote expandable>Первая строка.\nВторая строка.</blockquote>\n\n• Один\n• <b>Два</b>",
+            $html,
+        );
+    }
+
     public function test_it_preserves_ordered_list_numbers_and_inline_formatting(): void
     {
         $formatter = new TelegramMessageFormatter;

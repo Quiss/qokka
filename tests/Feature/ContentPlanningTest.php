@@ -406,19 +406,30 @@ class ContentPlanningTest extends TestCase
             $result['text'],
         );
         Http::assertSentCount(2);
+        $systemPrompt = (string) data_get(Http::recorded()[0][0]->data(), 'messages.0.content');
         $prompt = (string) data_get(Http::recorded()[0][0]->data(), 'messages.1.content.0.text');
-        $this->assertStringContainsString('Разрешена обычная разметка Markdown', $prompt);
-        $this->assertStringContainsString('отдельная цитата в формате > текст', $prompt);
+        $correctionSystemPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'messages.0.content');
+        $this->assertStringContainsString('В готовом посте используй только абсолютные календарные даты', $systemPrompt);
+        $this->assertStringContainsString('Не используй «сегодня», «завтра», «послезавтра», «вчера»', $systemPrompt);
+        $this->assertStringContainsString('++подчеркнутый++', $systemPrompt);
+        $this->assertStringContainsString('||спойлер||', $systemPrompt);
+        $this->assertStringContainsString('> [!EXPANDABLE]', $systemPrompt);
+        $this->assertStringContainsString('Исправь только подпись готового поста', $correctionSystemPrompt);
+        $this->assertStringContainsString('++подчеркнутый++', $correctionSystemPrompt);
+        $this->assertStringNotContainsString('Разрешена обычная разметка Markdown', $prompt);
         $this->assertStringContainsString('единственный источник постоянных требований к тону', $prompt);
         $this->assertStringContainsString('Пиши ровно одним абзацем, без эмодзи и закончи самым сильным фактом.', $prompt);
         $this->assertStringContainsString('Недавний пост с повторяющейся структурой.', $prompt);
         $this->assertStringContainsString('[ПокаТренд](https://t.me/PokaTrend)', $prompt);
-        $this->assertStringContainsString('Плановая публикация: 2026-07-27T12:00:00+03:00', $prompt);
+        $this->assertStringContainsString('"scheduled_at":"2026-07-27T12:00:00+03:00"', $prompt);
+        $this->assertStringContainsString('"local_date":"2026-07-27"', $prompt);
+        $this->assertStringContainsString('"posted_at_local":"2026-07-26T18:00:00+03:00"', $prompt);
+        $this->assertStringContainsString('"relative_dates":{"вчера":"2026-07-25","сегодня":"2026-07-26","завтра":"2026-07-27","послезавтра":"2026-07-28"}', $prompt);
         $this->assertStringContainsString('stale_at_publication', $prompt);
-        $this->assertStringContainsString('относительно posted_at источника', $prompt);
+        $this->assertStringContainsString('используй только готовое соответствие relative_dates', $prompt);
         $this->assertStringNotContainsString('легкий инфоповод может занять 1–2 коротких абзаца', $prompt);
         $this->assertStringNotContainsString('используй от 0 до 2 жирных акцентов', $prompt);
-        $this->assertSame(['v6', 'v6'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
+        $this->assertSame(['v7', 'v7'], AiRun::query()->orderBy('id')->pluck('prompt_version')->all());
     }
 
     public function test_plan_review_receives_source_and_publication_times_for_freshness_checks(): void
