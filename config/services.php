@@ -67,7 +67,7 @@ return [
         'bridge_secret' => env('TELEGRAM_BRIDGE_SECRET'),
         'bridge_url' => env('TELEGRAM_BRIDGE_URL', env('APP_URL').'/api/internal/telegram/updates'),
         'subscriptions_url' => env('TELEGRAM_SUBSCRIPTIONS_URL', env('APP_URL').'/api/internal/telegram/subscriptions'),
-        'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 400 * 1024 * 1024),
+        'media_max_bytes' => (int) env('TELEGRAM_MEDIA_MAX_BYTES', 500 * 1024 * 1024),
         'api_server' => [
             'url' => env('TELEGRAM_API_SERVER_URL', 'http://telegram-api:9503'),
             'websocket_url' => env('TELEGRAM_API_SERVER_WEBSOCKET_URL', 'ws://telegram-api:9503/events'),
