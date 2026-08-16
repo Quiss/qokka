@@ -9,6 +9,7 @@ use App\Actions\PopulateContentPlanSafetyNet;
 use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\DeliveryStatus;
+use App\Jobs\DownloadMediaAssetJob;
 use App\Jobs\RewritePlannedPostJob;
 use App\MediaType;
 use App\Models\ContentPlan;
@@ -128,6 +129,76 @@ class ModerationFlowTest extends TestCase
             $plannedPost->mediaAssets()->pluck('origin_media_asset_id')->all(),
         );
         Queue::assertPushed(RewritePlannedPostJob::class);
+    }
+
+    public function test_plan_approval_skips_oversized_media_and_uses_an_alternative_source(): void
+    {
+        Queue::fake();
+        config(['services.telegram.media_max_bytes' => 500 * 1024 * 1024]);
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'slot_schedule' => [now()->addDay()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $primarySource = SourcePost::factory()->create();
+        $alternativeSource = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($primarySource, ['is_primary' => true]);
+        $candidate->sourcePosts()->attach($alternativeSource, ['is_primary' => false]);
+        $oversizedVideo = MediaAsset::factory()->for($primarySource, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => null,
+            'size_bytes' => 501 * 1024 * 1024,
+            'downloaded_at' => null,
+        ]);
+        $alternativePhoto = MediaAsset::factory()->for($alternativeSource, 'mediable')->create();
+
+        $builtPlan = app(BuildContentPlan::class)->handle($plan);
+
+        $plannedPost = $builtPlan->plannedPosts->sole();
+        $this->assertSame(ContentPlanStatus::Rewriting, $builtPlan->status);
+        $this->assertSame(
+            [$alternativePhoto->id],
+            $plannedPost->mediaAssets()->pluck('origin_media_asset_id')->all(),
+        );
+        $this->assertDatabaseMissing('media_assets', [
+            'mediable_type' => PlannedPost::class,
+            'mediable_id' => $plannedPost->id,
+            'origin_media_asset_id' => $oversizedVideo->id,
+        ]);
+        Queue::assertPushed(RewritePlannedPostJob::class);
+        Queue::assertNotPushed(DownloadMediaAssetJob::class);
+    }
+
+    public function test_plan_with_only_oversized_media_is_built_as_text_only(): void
+    {
+        Queue::fake();
+        config(['services.telegram.media_max_bytes' => 500 * 1024 * 1024]);
+        $plan = ContentPlan::factory()->create([
+            'status' => ContentPlanStatus::CandidateReview,
+            'slot_schedule' => [now()->addDay()->toIso8601String()],
+        ]);
+        $candidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'type' => MediaType::Video,
+            'path' => null,
+            'size_bytes' => 501 * 1024 * 1024,
+            'downloaded_at' => null,
+        ]);
+
+        $builtPlan = app(BuildContentPlan::class)->handle($plan);
+
+        $this->assertSame(ContentPlanStatus::Rewriting, $builtPlan->status);
+        $this->assertSame(0, $builtPlan->plannedPosts->sole()->mediaAssets()->count());
+        Queue::assertPushed(RewritePlannedPostJob::class);
+        Queue::assertNotPushed(DownloadMediaAssetJob::class);
     }
 
     public function test_approved_short_plan_is_built_without_replenishment(): void

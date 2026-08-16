@@ -28,6 +28,7 @@ use App\TelegramOwnerCommandStatus;
 use App\TelegramOwnerCommandType;
 use App\TelegramSourceAccessStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -556,6 +557,112 @@ class TelegramMediaWorkflowTest extends TestCase
             $this->assertSame(
                 ['Файл размером 350.5 MB превышает лимит 300 MB и не может быть выбран.'],
                 $exception->errors()['media_asset_ids'],
+            );
+        }
+    }
+
+    public function test_editor_can_upload_and_order_custom_media_with_source_media(): void
+    {
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $plan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $sourceAsset = MediaAsset::factory()->for($sourcePost, 'mediable')->create([
+            'path' => 'telegram/source.jpg',
+        ]);
+        Storage::disk('local')->put('telegram/source.jpg', 'source-photo');
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+        $upload = UploadedFile::fake()->image('replacement.jpg')->size(200);
+
+        app(PlannedPostMediaManager::class)->replaceEditorSelection(
+            $post,
+            ['upload:'.$upload->getFilename(), 'source:'.$sourceAsset->id],
+            [$upload],
+            $user->id,
+        );
+
+        $selected = $post->mediaAssets()->get();
+        $customAsset = $selected->first();
+        $this->assertCount(2, $selected);
+        $this->assertNull($customAsset?->origin_media_asset_id);
+        $this->assertSame(MediaType::Photo, $customAsset?->type);
+        $this->assertSame('replacement.jpg', data_get($customAsset?->metadata, 'original_name'));
+        $this->assertSame($user->id, data_get($customAsset?->metadata, 'uploaded_by_id'));
+        $this->assertSame($sourceAsset->id, $selected->last()?->origin_media_asset_id);
+        Storage::disk('local')->assertExists((string) $customAsset?->path);
+    }
+
+    public function test_editor_upload_rejects_an_unsupported_file_type(): void
+    {
+        Storage::fake('local');
+        $post = PlannedPost::factory()->create();
+        $upload = UploadedFile::fake()->create('document.pdf', 100, 'application/pdf');
+
+        try {
+            app(PlannedPostMediaManager::class)->replaceEditorSelection(
+                $post,
+                ['upload:'.$upload->getFilename()],
+                [$upload],
+            );
+            $this->fail('An unsupported upload should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['Разрешены JPEG, PNG, WebP, GIF и MP4.'],
+                $exception->errors()['custom_media_uploads'],
+            );
+        }
+
+        $this->assertSame(0, $post->mediaAssets()->count());
+    }
+
+    public function test_editor_upload_rejects_a_file_over_the_configured_limit(): void
+    {
+        Storage::fake('local');
+        config(['services.telegram.media_max_bytes' => 100 * 1024]);
+        $post = PlannedPost::factory()->create();
+        $upload = UploadedFile::fake()->image('too-large.jpg')->size(101);
+
+        try {
+            app(PlannedPostMediaManager::class)->replaceEditorSelection(
+                $post,
+                ['upload:'.$upload->getFilename()],
+                [$upload],
+            );
+            $this->fail('An oversized upload should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['Файл размером 101 KB превышает лимит 100 KB.'],
+                $exception->errors()['custom_media_uploads'],
+            );
+        }
+
+        $this->assertSame(0, $post->mediaAssets()->count());
+    }
+
+    public function test_unknown_size_source_media_cannot_be_selected(): void
+    {
+        $plan = ContentPlan::factory()->create();
+        $candidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $sourcePost = SourcePost::factory()->create();
+        $candidate->sourcePosts()->attach($sourcePost, ['is_primary' => true]);
+        $asset = MediaAsset::factory()->for($sourcePost, 'mediable')->create(['size_bytes' => null]);
+        $post = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $candidate->id,
+        ]);
+
+        try {
+            app(PlannedPostMediaManager::class)->replaceSelection($post, [$asset->id]);
+            $this->fail('Media with an unknown size should fail.');
+        } catch (ValidationException $exception) {
+            $this->assertStringContainsString(
+                'Размер файла неизвестен',
+                $exception->errors()['media_asset_ids'][0],
             );
         }
     }

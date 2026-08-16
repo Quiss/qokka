@@ -38,6 +38,7 @@ use App\PlannedPostStatus;
 use App\TelegramOwnerCommandType;
 use Filament\Actions\Testing\TestAction;
 use Filament\Forms\Components\DateTimePicker;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\ViewField;
 use Filament\Schemas\Components\View;
@@ -358,7 +359,8 @@ class EditorialPlanEnhancementsTest extends TestCase
                 'media_asset_ids',
                 checkComponentUsing: fn ($component): bool => $component instanceof ViewField
                     && $component->getView() === 'filament.forms.components.media-picker'
-                    && $component->getViewData()['assets']->contains('id', $sourceMedia->id),
+                    && $component->getViewData()['assets']->contains('id', $sourceMedia->id)
+                    && $component->getViewData()['maxBytes'] === 500 * 1024 * 1024,
             );
         $relationManager = $component->instance();
 
@@ -370,8 +372,11 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertNotNull($mountedSchemaName);
         $schemaComponents = $relationManager->getSchema($mountedSchemaName)?->getComponents();
         $this->assertInstanceOf(MarkdownEditor::class, $schemaComponents[0] ?? null);
-        $this->assertInstanceOf(ViewField::class, $schemaComponents[1] ?? null);
-        $this->assertInstanceOf(View::class, $schemaComponents[2] ?? null);
+        $this->assertInstanceOf(FileUpload::class, $schemaComponents[1] ?? null);
+        $this->assertSame(10, $schemaComponents[1]->getMaxFiles());
+        $this->assertContains('video/mp4', $schemaComponents[1]->getAcceptedFileTypes());
+        $this->assertInstanceOf(ViewField::class, $schemaComponents[2] ?? null);
+        $this->assertInstanceOf(View::class, $schemaComponents[3] ?? null);
 
         $this->view('filament.content-plans.planned-post-details', [
             'record' => $plannedPost->load([

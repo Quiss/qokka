@@ -19,6 +19,7 @@ services:
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
         volumes:
             - '.:/var/www/html'
+            - './docker/production/php/php.ini:/etc/php/8.5/cli/conf.d/zzz-channelbot.ini'
         networks:
             - sail
         depends_on:

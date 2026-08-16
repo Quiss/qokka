@@ -9,6 +9,25 @@ use Tests\TestCase;
 
 class ProductionDeploymentConfigurationTest extends TestCase
 {
+    public function test_editor_media_upload_limits_are_consistent_across_runtime_configuration(): void
+    {
+        $productionIni = File::get(base_path('docker/production/php/php-production.ini'));
+        $sailIni = File::get(base_path('docker/production/php/php.ini'));
+        $compose = File::get(base_path('compose.yaml'));
+
+        $this->assertSame(['required', 'file', 'max:512000'], config('livewire.temporary_file_upload.rules'));
+        $this->assertSame(30, config('livewire.temporary_file_upload.max_upload_time'));
+        $this->assertStringContainsString('upload_max_filesize = 500M', $productionIni);
+        $this->assertStringContainsString('post_max_size = 512M', $productionIni);
+        $this->assertStringContainsString('max_input_time = 1800', $productionIni);
+        $this->assertStringContainsString('upload_max_filesize=500M', $sailIni);
+        $this->assertStringContainsString('post_max_size=512M', $sailIni);
+        $this->assertStringContainsString(
+            './docker/production/php/php.ini:/etc/php/8.5/cli/conf.d/zzz-channelbot.ini',
+            $compose,
+        );
+    }
+
     public function test_deploy_pauses_and_restores_all_long_running_queues(): void
     {
         $makefile = File::get(base_path('Makefile'));

@@ -11,6 +11,7 @@ use App\Models\MediaAsset;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Number;
 use RuntimeException;
 use Throwable;
 
@@ -86,7 +87,9 @@ class TelegramPublisher implements Publisher
         }
 
         if ($oversized !== null) {
-            throw new RuntimeException('Выбранное медиа превышает лимит Telegram 50 МБ.');
+            $maxFileSize = Number::fileSize($maxBytes, maxPrecision: 2);
+
+            throw new RuntimeException("Выбранное медиа превышает лимит {$maxFileSize}.");
         }
 
         if ($selectedMedia->count() > 1 && $selectedMedia->contains('type', MediaType::Animation)) {

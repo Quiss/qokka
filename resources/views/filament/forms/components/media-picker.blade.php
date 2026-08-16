@@ -1,12 +1,14 @@
 @php
     $isDisabled = $field->isDisabled();
     $media = $assets
-        ->map(function (\App\Models\MediaAsset $asset): array {
+        ->map(function (\App\Models\MediaAsset $asset) use ($maxBytes): array {
             $isVideo = $asset->type === \App\MediaType::Video;
             $isAnimation = $asset->type === \App\MediaType::Animation;
+            $isSelectable = (bool) $asset->getAttribute('is_selectable');
 
             return [
-                'id' => (string) $asset->id,
+                'id' => (string) $asset->getAttribute('selection_token'),
+                'asset_id' => (string) $asset->id,
                 'type' => match ($asset->type) {
                     \App\MediaType::Video => 'video',
                     \App\MediaType::Animation => 'animation',
@@ -20,7 +22,7 @@
                 'source_label' => (string) $asset->getAttribute('source_label'),
                 'source_url' => $asset->getAttribute('source_url'),
                 'preview_url' => $asset->previewUrl(),
-                'download_url' => $isVideo || $isAnimation ? $asset->downloadUrl() : null,
+                'download_url' => $isSelectable && ($isVideo || $isAnimation) ? $asset->downloadUrl() : null,
                 'mime_type' => $asset->mime_type ?: match ($asset->type) {
                     \App\MediaType::Video, \App\MediaType::Animation => 'video/mp4',
                     default => 'image/jpeg',
@@ -29,9 +31,14 @@
                     ? 'Размер неизвестен'
                     : number_format($asset->size_bytes / 1024 / 1024, 1, ',', ' ').' МБ',
                 'is_failed' => $asset->failed_at !== null,
+                'is_selectable' => $isSelectable,
+                'unavailable_reason' => $asset->getAttribute('unavailable_reason'),
+                'is_custom' => (bool) $asset->getAttribute('is_custom'),
             ];
         })
         ->values();
+    $uploadStatePath = \Illuminate\Support\Str::beforeLast($getStatePath(), '.').'.custom_media_uploads';
+    $maxSizeLabel = \Illuminate\Support\Number::fileSize($maxBytes, maxPrecision: 2);
 @endphp
 
 <x-dynamic-component :component="$getFieldWrapperView()" :field="$field">
@@ -40,6 +47,12 @@
             state: $wire.$entangle(@js($getStatePath())),
             assets: @js($media),
             disabled: @js($isDisabled),
+            uploadStatePath: @js($uploadStatePath),
+            maxBytes: @js($maxBytes),
+            uploadedAssets: [],
+            uploading: false,
+            uploadProgress: 0,
+            uploadError: null,
             init() {
                 const allowedIds = this.assets.map((asset) => asset.id)
                 this.state = (this.state ?? [])
@@ -50,9 +63,13 @@
                 return (this.state ?? []).includes(String(id))
             },
             asset(id) {
-                return this.assets.find((asset) => asset.id === String(id))
+                return [...this.assets, ...this.uploadedAssets].find((asset) => asset.id === String(id))
             },
             canSelect(asset) {
+                if (! asset.is_selectable) {
+                    return false
+                }
+
                 const selectedAssets = (this.state ?? [])
                     .map((id) => this.asset(id))
                     .filter(Boolean)
@@ -69,6 +86,19 @@
                 }
 
                 this.state = this.state.filter((selectedId) => selectedId !== String(id))
+
+                if (String(id).startsWith('upload:')) {
+                    const filename = String(id).slice(7)
+                    const uploadedAsset = this.uploadedAssets.find((asset) => asset.id === String(id))
+
+                    this.$wire.$removeUpload(this.uploadStatePath, filename, () => {
+                        if (uploadedAsset?.preview_url) {
+                            URL.revokeObjectURL(uploadedAsset.preview_url)
+                        }
+
+                        this.uploadedAssets = this.uploadedAssets.filter((asset) => asset.id !== String(id))
+                    })
+                }
             },
             reorder(ids) {
                 if (this.disabled) {
@@ -76,6 +106,116 @@
                 }
 
                 this.state = ids.map((id) => String(id))
+            },
+            async chooseUploads(event) {
+                const files = Array.from(event.target.files ?? [])
+                event.target.value = ''
+                this.uploadError = null
+
+                if (this.disabled || files.length === 0) {
+                    return
+                }
+
+                for (const file of files) {
+                    if ((this.state ?? []).length >= 10) {
+                        this.uploadError = 'Можно выбрать не более 10 файлов.'
+                        break
+                    }
+
+                    const type = this.uploadType(file)
+
+                    if (! type) {
+                        this.uploadError = `Файл «${file.name}» имеет неподдерживаемый формат.`
+                        continue
+                    }
+
+                    if (file.size > this.maxBytes) {
+                        this.uploadError = `Файл «${file.name}» превышает лимит {{ $maxSizeLabel }}.`
+                        continue
+                    }
+
+                    const draftAsset = {
+                        id: '',
+                        asset_id: '',
+                        type,
+                        type_label: type === 'photo' ? 'Фото' : (type === 'video' ? 'Видео' : 'GIF'),
+                        source_label: 'Своё медиа',
+                        source_url: null,
+                        preview_url: URL.createObjectURL(file),
+                        download_url: null,
+                        mime_type: file.type,
+                        size_label: this.formatSize(file.size),
+                        is_failed: false,
+                        is_selectable: true,
+                        unavailable_reason: null,
+                        is_custom: true,
+                    }
+
+                    if (! this.canSelect(draftAsset)) {
+                        URL.revokeObjectURL(draftAsset.preview_url)
+                        this.uploadError = 'GIF можно выбрать только отдельно от других медиа.'
+                        continue
+                    }
+
+                    await this.uploadFile(file, draftAsset)
+                }
+            },
+            uploadFile(file, draftAsset) {
+                this.uploading = true
+                this.uploadProgress = 0
+
+                return new Promise((resolve) => {
+                    this.$wire.$uploadMultiple(
+                        this.uploadStatePath,
+                        [file],
+                        (filenames) => {
+                            const filename = filenames[0]
+                            draftAsset.id = `upload:${filename}`
+                            this.uploadedAssets.push(draftAsset)
+                            this.state = [...(this.state ?? []), draftAsset.id]
+                            this.uploading = false
+                            this.uploadProgress = 100
+                            resolve()
+                        },
+                        () => {
+                            URL.revokeObjectURL(draftAsset.preview_url)
+                            this.uploading = false
+                            this.uploadProgress = 0
+                            this.uploadError = `Не удалось загрузить файл «${file.name}».`
+                            resolve()
+                        },
+                        (progressEvent) => {
+                            this.uploadProgress = progressEvent.detail?.progress ?? 0
+                        },
+                        () => {
+                            URL.revokeObjectURL(draftAsset.preview_url)
+                            this.uploading = false
+                            this.uploadProgress = 0
+                            resolve()
+                        },
+                    )
+                })
+            },
+            uploadType(file) {
+                if (['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+                    return 'photo'
+                }
+
+                if (file.type === 'image/gif') {
+                    return 'animation'
+                }
+
+                return file.type === 'video/mp4' ? 'video' : null
+            },
+            formatSize(bytes) {
+                return `${(bytes / 1024 / 1024).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`
+            },
+            destroy() {
+                this.uploadedAssets.forEach((asset) => {
+                    if (asset.preview_url) {
+                        URL.revokeObjectURL(asset.preview_url)
+                    }
+                })
             },
         }"
         class="flex flex-col gap-5"
@@ -90,6 +230,37 @@
                     <span x-text="(state ?? []).length"></span>/10
                 </span>
             </div>
+
+            @unless ($isDisabled)
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <label class="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-primary-500 focus-within:outline-2 focus-within:outline-offset-2">
+                        <x-filament::icon icon="heroicon-m-arrow-up-tray" class="h-4 w-4" />
+                        Загрузить своё медиа
+                        <input
+                            type="file"
+                            multiple
+                            accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
+                            x-on:change="chooseUploads($event)"
+                            x-bind:disabled="uploading || (state ?? []).length >= 10"
+                            class="sr-only"
+                        >
+                    </label>
+                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                        JPEG, PNG, WebP, GIF или MP4 · до {{ $maxSizeLabel }} на файл
+                    </p>
+                </div>
+
+                <div x-show="uploading" class="mt-2 flex items-center gap-2 text-xs text-primary-700 dark:text-primary-300">
+                    <x-filament::loading-indicator class="h-4 w-4" />
+                    <span>Загрузка: <span x-text="uploadProgress"></span>%</span>
+                </div>
+
+                <p
+                    x-show="uploadError"
+                    x-text="uploadError"
+                    class="mt-2 text-xs font-medium text-danger-600 dark:text-danger-400"
+                ></p>
+            @endunless
 
             <div
                 x-show="(state ?? []).length === 0"
@@ -111,12 +282,20 @@
                         class="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-primary-200 bg-white p-1.5 shadow-sm dark:border-primary-500/30 dark:bg-gray-900"
                     >
                         <div class="h-9 w-12 shrink-0 overflow-hidden rounded-md bg-gray-100 dark:bg-gray-800">
-                            <template x-if="asset(id)?.preview_url">
+                            <template x-if="asset(id)?.preview_url && ! asset(id)?.mime_type?.startsWith('video/')">
                                 <img
                                     class="h-full w-full object-cover"
                                     x-bind:src="asset(id).preview_url"
                                     x-bind:alt="asset(id).type_label"
                                 >
+                            </template>
+                            <template x-if="asset(id)?.preview_url && asset(id)?.mime_type?.startsWith('video/')">
+                                <video
+                                    class="h-full w-full object-cover"
+                                    x-bind:src="asset(id).preview_url"
+                                    muted
+                                    playsinline
+                                ></video>
                             </template>
                             <template x-if="! asset(id)?.preview_url">
                                 <div class="flex h-full items-center justify-center text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -129,7 +308,10 @@
                             <p class="truncate text-xs font-semibold text-gray-950 dark:text-white" x-text="asset(id)?.source_label"></p>
                             <p class="mt-0.5 text-[0.6875rem] text-gray-500 dark:text-gray-400">
                                 <span x-text="asset(id)?.type_label"></span>
-                                <span> · #</span><span x-text="id"></span>
+                                <template x-if="asset(id)?.asset_id">
+                                    <span> · #<span x-text="asset(id)?.asset_id"></span></span>
+                                </template>
+                                <span> · </span><span x-text="asset(id)?.size_label"></span>
                             </p>
                         </div>
 
@@ -163,7 +345,7 @@
         @else
             <section>
                 <div class="flex flex-wrap items-center justify-between gap-2">
-                    <h4 class="text-sm font-semibold text-gray-950 dark:text-white">Все медиа из источников</h4>
+                    <h4 class="text-sm font-semibold text-gray-950 dark:text-white">Доступные медиа</h4>
                     <p
                         x-show="(state ?? []).length >= 10"
                         class="text-xs font-medium text-warning-700 dark:text-warning-300"
@@ -178,7 +360,9 @@
                             class="group relative overflow-hidden rounded-xl border bg-white shadow-sm transition focus-within:outline-2 focus-within:outline-offset-2 dark:bg-gray-900"
                             x-bind:class="isSelected(@js($item['id']))
                                 ? 'border-primary-500 ring-2 ring-primary-500/30'
-                                : 'border-gray-200 hover:border-primary-300 dark:border-white/10 dark:hover:border-primary-500/50'"
+                                : (@js($item['is_selectable'])
+                                    ? 'border-gray-200 hover:border-primary-300 dark:border-white/10 dark:hover:border-primary-500/50'
+                                    : 'cursor-not-allowed border-gray-200 opacity-65 dark:border-white/10')"
                         >
                             <input
                                 type="checkbox"
@@ -223,8 +407,13 @@
                                 <div class="min-w-0">
                                     <p class="truncate text-xs font-semibold text-gray-950 dark:text-white">{{ $item['source_label'] }}</p>
                                     <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
-                                        {{ $item['type_label'] }} · #{{ $item['id'] }} · {{ $item['size_label'] }}
+                                        {{ $item['type_label'] }} · #{{ $item['asset_id'] }} · {{ $item['size_label'] }}
                                     </p>
+                                    @if ($item['unavailable_reason'])
+                                        <p class="mt-1 text-xs font-medium text-danger-600 dark:text-danger-400">
+                                            {{ $item['unavailable_reason'] }}
+                                        </p>
+                                    @endif
                                 </div>
 
                                 <span

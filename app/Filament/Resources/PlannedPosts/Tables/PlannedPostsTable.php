@@ -15,6 +15,7 @@ use App\RiskFlagLabels;
 use App\Services\PlannedPostMediaManager;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\MarkdownEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -126,10 +127,12 @@ class PlannedPostsTable
                     ->fillForm(fn (PlannedPost $record): array => [
                         'text' => $record->text,
                         'media_asset_ids' => $record->mediaAssets
-                            ->pluck('origin_media_asset_id')
-                            ->filter()
+                            ->map(fn (MediaAsset $asset): string => $asset->origin_media_asset_id !== null
+                                ? 'source:'.$asset->origin_media_asset_id
+                                : 'custom:'.$asset->id)
                             ->values()
                             ->all(),
+                        'custom_media_uploads' => [],
                     ])
                     ->schema([
                         MarkdownEditor::make('text')
@@ -142,12 +145,29 @@ class PlannedPostsTable
                             ->required()
                             ->disabled(fn (PlannedPost $record): bool => self::isImmutable($record))
                             ->columnSpanFull(),
+                        FileUpload::make('custom_media_uploads')
+                            ->label('Новые файлы')
+                            ->multiple()
+                            ->storeFiles(false)
+                            ->acceptedFileTypes([
+                                'image/jpeg',
+                                'image/png',
+                                'image/webp',
+                                'image/gif',
+                                'video/mp4',
+                            ])
+                            ->maxSize(fn (): int => (int) ceil(self::mediaMaxBytes() / 1024))
+                            ->maxFiles(10)
+                            ->disabled(fn (PlannedPost $record): bool => self::isImmutable($record))
+                            ->extraFieldWrapperAttributes(['class' => 'hidden'])
+                            ->columnSpanFull(),
                         ViewField::make('media_asset_ids')
                             ->label('Какие фото, видео и GIF пойдут в публикацию')
-                            ->helperText('Нажмите на карточки, чтобы выбрать файлы. GIF публикуется отдельно от других медиа. В верхнем списке перетащите выбранные медиа в нужном порядке. Максимум 10.')
+                            ->helperText('Выберите файлы из источников или загрузите свои. GIF публикуется отдельно. Перетащите выбранные медиа в нужном порядке. Максимум 10.')
                             ->view('filament.forms.components.media-picker')
                             ->viewData(fn (PlannedPost $record, PlannedPostMediaManager $mediaManager): array => [
                                 'assets' => $mediaManager->availableAssets($record),
+                                'maxBytes' => self::mediaMaxBytes(),
                             ])
                             ->rules(['array', 'max:10'])
                             ->disabled(fn (PlannedPost $record): bool => self::isImmutable($record))
@@ -165,8 +185,13 @@ class PlannedPostsTable
                         }
 
                         $record->update(['text' => $data['text']]);
-                        $mediaManager->replaceSelection($record, $data['media_asset_ids'] ?? []);
                         $user = auth()->user();
+                        $mediaManager->replaceEditorSelection(
+                            $record,
+                            $data['media_asset_ids'] ?? [],
+                            $data['custom_media_uploads'] ?? [],
+                            $user instanceof User ? $user->id : null,
+                        );
 
                         if ($user instanceof User) {
                             ModerationAction::create([
@@ -355,5 +380,10 @@ class PlannedPostsTable
         $message = collect($exception->errors())->flatten()->first();
 
         return is_string($message) ? $message : 'Проверьте данные публикации и повторите попытку.';
+    }
+
+    private static function mediaMaxBytes(): int
+    {
+        return (int) config('services.telegram.media_max_bytes', 50 * 1024 * 1024);
     }
 }
