@@ -33,6 +33,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Mockery;
 use RuntimeException;
 use Tests\TestCase;
@@ -595,6 +596,59 @@ class TelegramMediaWorkflowTest extends TestCase
         $this->assertSame($user->id, data_get($customAsset?->metadata, 'uploaded_by_id'));
         $this->assertSame($sourceAsset->id, $selected->last()?->origin_media_asset_id);
         Storage::disk('local')->assertExists((string) $customAsset?->path);
+    }
+
+    public function test_editor_reads_temporary_upload_metadata_before_moving_it(): void
+    {
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $post = PlannedPost::factory()->create();
+        $temporaryFilename = 'temporary-editor-upload.jpg';
+        $temporaryPath = 'livewire-tmp/'.$temporaryFilename;
+
+        Storage::disk('local')->put($temporaryPath, 'photo-content');
+        Storage::disk('local')->put($temporaryPath.'.json', json_encode([
+            'name' => 'original-photo.jpg',
+            'type' => 'image/jpeg',
+            'size' => 13,
+            'hash' => 'stored-editor-upload.jpg',
+        ], JSON_THROW_ON_ERROR));
+
+        $upload = new class($temporaryFilename, 'local') extends TemporaryUploadedFile
+        {
+            public function getMimeType(): string
+            {
+                if (! $this->exists()) {
+                    throw new RuntimeException('MIME type was read after the temporary upload was moved.');
+                }
+
+                return parent::getMimeType();
+            }
+
+            public function getSize(): int
+            {
+                if (! $this->exists()) {
+                    throw new RuntimeException('Size was read after the temporary upload was moved.');
+                }
+
+                return parent::getSize();
+            }
+        };
+
+        app(PlannedPostMediaManager::class)->replaceEditorSelection(
+            $post,
+            ['upload:'.$upload->getFilename()],
+            [$upload],
+            $user->id,
+        );
+
+        $customAsset = $post->mediaAssets()->sole();
+
+        $this->assertSame('image/jpeg', $customAsset->mime_type);
+        $this->assertSame(13, $customAsset->size_bytes);
+        $this->assertSame('original-photo.jpg', data_get($customAsset->metadata, 'original_name'));
+        Storage::disk('local')->assertMissing($temporaryPath);
+        Storage::disk('local')->assertExists((string) $customAsset->path);
     }
 
     public function test_editor_upload_rejects_an_unsupported_file_type(): void

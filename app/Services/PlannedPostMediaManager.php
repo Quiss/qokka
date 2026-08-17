@@ -153,6 +153,10 @@ class PlannedPostMediaManager
                     $this->invalidSelection();
                 }
 
+                $uploadId = spl_object_id($upload);
+                $mimeType = $upload->getMimeType();
+                $size = $upload->getSize();
+                $originalName = $upload->getClientOriginalName();
                 $path = $upload->store('editorial/planned-posts/'.$plannedPost->id, 'local');
 
                 if (! is_string($path)) {
@@ -165,9 +169,12 @@ class PlannedPostMediaManager
                     throw new RuntimeException('Не удалось проверить загруженное медиа.');
                 }
 
-                $storedUploads[$upload->getFilename()] = [
+                $storedUploads[$uploadId] = [
                     'path' => $path,
                     'checksum' => $checksum,
+                    'mime_type' => $mimeType,
+                    'size' => $size,
+                    'original_name' => $originalName,
                 ];
             }
 
@@ -216,21 +223,21 @@ class PlannedPostMediaManager
                         $this->invalidSelection();
                     }
 
-                    $stored = $storedUploads[$upload->getFilename()];
+                    $stored = $storedUploads[spl_object_id($upload)];
                     $asset = $plannedPost->mediaAssets()->create([
                         'type' => $item['type'],
                         'disk' => 'local',
                         'path' => $stored['path'],
                         'preview_disk' => $item['type'] === MediaType::Animation ? 'local' : null,
                         'preview_path' => $item['type'] === MediaType::Animation ? $stored['path'] : null,
-                        'preview_mime_type' => $item['type'] === MediaType::Animation ? $upload->getMimeType() : null,
-                        'mime_type' => $upload->getMimeType(),
-                        'size_bytes' => $upload->getSize(),
+                        'preview_mime_type' => $item['type'] === MediaType::Animation ? $stored['mime_type'] : null,
+                        'mime_type' => $stored['mime_type'],
+                        'size_bytes' => $stored['size'],
                         'checksum' => $stored['checksum'],
                         'sort_order' => $index,
                         'metadata' => [
                             'editor_upload' => true,
-                            'original_name' => $upload->getClientOriginalName(),
+                            'original_name' => $stored['original_name'],
                             'uploaded_by_id' => $uploadedById,
                         ],
                         'downloaded_at' => now(),
