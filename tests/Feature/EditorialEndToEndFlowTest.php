@@ -8,16 +8,19 @@ use App\Actions\BuildContentPlan;
 use App\Actions\GenerateCandidateBatch;
 use App\ContentPlanStatus;
 use App\Contracts\ContentIntelligence;
+use App\DeliveryStatus;
 use App\Jobs\PublishDeliveryJob;
 use App\Jobs\ReviewContentPlanJob;
 use App\Jobs\RewritePlannedPostJob;
 use App\Models\ContentPlan;
+use App\Models\Delivery;
 use App\Models\Destination;
 use App\Models\PlannedPost;
 use App\Models\Publication;
 use App\Models\Source;
 use App\Models\SourceGroup;
 use App\Models\SourcePost;
+use App\Models\StoryCandidate;
 use App\Models\User;
 use App\PlannedPostStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -122,5 +125,74 @@ class EditorialEndToEndFlowTest extends TestCase
         $this->assertSame(ContentPlanStatus::Completed, $plan->fresh()->status);
         $this->assertSame(['501'], $delivery->fresh()->external_message_ids);
         Http::assertSentCount(1);
+    }
+
+    public function test_ai_review_never_reverses_an_existing_manual_approval(): void
+    {
+        $publication = Publication::factory()->create();
+        $destination = Destination::factory()->create(['publication_id' => $publication->id]);
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'status' => ContentPlanStatus::Rewriting,
+        ]);
+        $user = User::factory()->create();
+        $approvedAt = now()->subMinute()->startOfSecond();
+        $approvedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'status' => PlannedPostStatus::Approved,
+            'risk_flags' => ['source_conflict'],
+            'ai_review_status' => 'blocked',
+            'approved_by' => $user->id,
+            'approved_at' => $approvedAt,
+            'override_by' => $user->id,
+            'override_reason' => 'Проверено вручную',
+        ]);
+        $reviewablePost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'status' => PlannedPostStatus::FinalReview,
+        ]);
+        $delivery = Delivery::factory()->create([
+            'planned_post_id' => $approvedPost->id,
+            'destination_id' => $destination->id,
+            'status' => DeliveryStatus::Pending,
+        ]);
+        $intelligence = new class implements ContentIntelligence
+        {
+            public function rankAndCluster(ContentPlan $contentPlan, Collection $sourcePosts): array
+            {
+                return ['clusters' => []];
+            }
+
+            public function rewrite(PlannedPost $plannedPost, ?string $instruction = null): array
+            {
+                return ['text' => 'Готовый текст'];
+            }
+
+            public function reviewPlan(ContentPlan $contentPlan): array
+            {
+                return [
+                    'items' => $contentPlan->plannedPosts->map(fn (PlannedPost $post): array => [
+                        'planned_post_id' => $post->id,
+                        'risk_flags' => [],
+                    ])->all(),
+                    'duplicate_groups' => [],
+                ];
+            }
+        };
+
+        (new ReviewContentPlanJob($plan->id))->handle($intelligence);
+
+        $approvedPost->refresh();
+        $this->assertSame(PlannedPostStatus::Approved, $approvedPost->status);
+        $this->assertSame(['source_conflict'], $approvedPost->risk_flags);
+        $this->assertSame('blocked', $approvedPost->ai_review_status);
+        $this->assertSame($user->id, $approvedPost->approved_by);
+        $this->assertTrue($approvedPost->approved_at?->equalTo($approvedAt));
+        $this->assertSame($user->id, $approvedPost->override_by);
+        $this->assertSame('Проверено вручную', $approvedPost->override_reason);
+        $this->assertSame(DeliveryStatus::Pending, $delivery->fresh()->status);
+        $this->assertSame(PlannedPostStatus::FinalReview, $reviewablePost->fresh()->status);
     }
 }

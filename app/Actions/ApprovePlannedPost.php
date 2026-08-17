@@ -4,6 +4,7 @@ namespace App\Actions;
 
 use App\ContentPlanStatus;
 use App\DeliveryStatus;
+use App\Models\ContentPlan;
 use App\Models\ModerationAction;
 use App\Models\PlannedPost;
 use App\Models\User;
@@ -24,6 +25,36 @@ class ApprovePlannedPost
     public function approve(PlannedPost $plannedPost, User $user, ?string $overrideReason = null): PlannedPost
     {
         return $this->approveWithActor($plannedPost, $user, $overrideReason);
+    }
+
+    /** @return array{approved: int, skipped: int, errors: list<string>} */
+    public function approveAllReviewable(ContentPlan $contentPlan, User $user): array
+    {
+        $plannedPosts = $contentPlan->plannedPosts()
+            ->with('storyCandidate')
+            ->whereIn('status', PlannedPostStatus::reviewableCases())
+            ->orderBy('scheduled_at')
+            ->get();
+        $approved = 0;
+        $errors = [];
+
+        foreach ($plannedPosts as $plannedPost) {
+            try {
+                $this->approve($plannedPost, $user);
+                $approved++;
+            } catch (ValidationException $exception) {
+                $message = collect($exception->errors())->flatten()->first();
+                $errors[] = $plannedPost->storyCandidate->title.': '.(
+                    is_string($message) ? $message : 'Публикацию нельзя одобрить.'
+                );
+            }
+        }
+
+        return [
+            'approved' => $approved,
+            'skipped' => count($errors),
+            'errors' => $errors,
+        ];
     }
 
     public function approveAutomatically(PlannedPost $plannedPost): PlannedPost
@@ -61,6 +92,22 @@ class ApprovePlannedPost
         ?string $overrideReason,
         bool $isAutomatic = false,
     ): PlannedPost {
+        $plannedPost->refresh();
+
+        if (in_array($plannedPost->status, [
+            PlannedPostStatus::Approved,
+            PlannedPostStatus::Publishing,
+            PlannedPostStatus::Published,
+        ], true)) {
+            return $plannedPost->load('deliveries');
+        }
+
+        if (! in_array($plannedPost->status, PlannedPostStatus::reviewableCases(), true)) {
+            throw ValidationException::withMessages([
+                'status' => 'Одобрить можно только готовую публикацию на этапе проверки рерайта.',
+            ]);
+        }
+
         $plannedPost->loadMissing('contentPlan.publication.destination', 'contentPlan.plannedPosts');
         $this->mediaManager->syncAvailableOrigins($plannedPost);
 
@@ -94,6 +141,12 @@ class ApprovePlannedPost
                 PlannedPostStatus::Published,
             ], true)) {
                 return $lockedPost->load('deliveries');
+            }
+
+            if (! in_array($lockedPost->status, PlannedPostStatus::reviewableCases(), true)) {
+                throw ValidationException::withMessages([
+                    'status' => 'Состояние публикации изменилось — обновите страницу перед одобрением.',
+                ]);
             }
 
             if ($isAutomatic && ! $this->canApproveAutomatically($lockedPost)) {

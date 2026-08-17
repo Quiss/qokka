@@ -13,4 +13,14 @@ enum PlannedPostStatus: string
     case Failed = 'failed';
     case Cancelled = 'cancelled';
     case NeedsReschedule = 'needs_reschedule';
+
+    /** @return list<self> */
+    public static function reviewableCases(): array
+    {
+        return [
+            self::FinalReview,
+            self::Blocked,
+            self::NeedsReschedule,
+        ];
+    }
 }

@@ -74,6 +74,7 @@ class PlaceCandidateInPlan
                 fn () => RewritePlannedPostJob::dispatch(
                     $plannedPost->id,
                     $plannedPost->rewrite_generation,
+                    focusedReview: true,
                 )->onQueue('ai'),
             );
 

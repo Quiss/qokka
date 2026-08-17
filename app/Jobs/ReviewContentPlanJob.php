@@ -57,6 +57,7 @@ class ReviewContentPlanJob implements ShouldBeUnique, ShouldQueue
         $postsToUpdate = $this->focusPlannedPostIds === null
             ? $contentPlan->plannedPosts
             : $contentPlan->plannedPosts->whereIn('id', $this->focusPlannedPostIds);
+        $postsToUpdate = $postsToUpdate->whereIn('status', PlannedPostStatus::reviewableCases());
 
         foreach ($postsToUpdate as $post) {
             $review = $reviews->get($post->id);

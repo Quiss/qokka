@@ -2,17 +2,20 @@
 
 namespace App\Filament\Resources\ContentPlans\RelationManagers;
 
+use App\Actions\ApproveStoryCandidate;
 use App\Actions\ReplenishContentPlanCandidates;
 use App\CandidateStatus;
 use App\ContentPlanStatus;
 use App\Filament\Resources\StoryCandidates\Schemas\StoryCandidateForm;
 use App\Filament\Resources\StoryCandidates\Tables\StoryCandidatesTable;
 use App\Models\ContentPlan;
+use App\Models\User;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
+use Illuminate\Validation\ValidationException;
 use LogicException;
 
 class StoryCandidatesRelationManager extends RelationManager
@@ -30,6 +33,38 @@ class StoryCandidatesRelationManager extends RelationManager
     {
         return StoryCandidatesTable::configure($table)
             ->headerActions([
+                Action::make('approveAllCandidates')
+                    ->label(fn (): string => 'Массово одобрить ('.$this->pendingCandidateCount().')')
+                    ->icon('heroicon-m-check-circle')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->modalHeading('Одобрить все оставшиеся новости')
+                    ->modalDescription(fn (): string => 'Будут одобрены все новости без решения: '.$this->pendingCandidateCount().'. Уже одобренные и отклонённые новости не изменятся.')
+                    ->visible(fn (): bool => $this->contentPlan()->status === ContentPlanStatus::CandidateReview
+                        && $this->pendingCandidateCount() > 0)
+                    ->action(function (ApproveStoryCandidate $approveStoryCandidate): void {
+                        $user = auth()->user();
+
+                        if (! $user instanceof User) {
+                            return;
+                        }
+
+                        try {
+                            $approved = $approveStoryCandidate->approveAllPending($this->contentPlan(), $user);
+                            Notification::make()
+                                ->title($approved > 0
+                                    ? "Одобрено новостей: {$approved}"
+                                    : 'Нет новостей для массового одобрения')
+                                ->status($approved > 0 ? 'success' : 'warning')
+                                ->send();
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title('Новости не одобрены')
+                                ->body($this->validationMessage($exception))
+                                ->danger()
+                                ->send();
+                        }
+                    }),
                 Action::make('replenishCandidates')
                     ->label(fn (): string => 'Добрать новости ('.$this->candidateDeficit().')')
                     ->icon('heroicon-m-plus')
@@ -48,6 +83,13 @@ class StoryCandidatesRelationManager extends RelationManager
                             ->send();
                     }),
             ]);
+    }
+
+    private function pendingCandidateCount(): int
+    {
+        return $this->contentPlan()->storyCandidates()
+            ->where('status', CandidateStatus::Pending)
+            ->count();
     }
 
     private function candidateDeficit(): int
@@ -74,5 +116,12 @@ class StoryCandidatesRelationManager extends RelationManager
         }
 
         return $contentPlan;
+    }
+
+    private function validationMessage(ValidationException $exception): string
+    {
+        $message = collect($exception->errors())->flatten()->first();
+
+        return is_string($message) ? $message : 'Обновите страницу и повторите попытку.';
     }
 }

@@ -103,6 +103,7 @@ class ReplaceRejectedPlannedPost
                 fn () => RewritePlannedPostJob::dispatch(
                     $replacement->id,
                     $replacement->rewrite_generation,
+                    focusedReview: true,
                 )->onQueue('ai'),
             );
 

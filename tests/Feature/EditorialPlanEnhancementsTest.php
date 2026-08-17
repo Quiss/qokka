@@ -24,6 +24,7 @@ use App\Jobs\RewritePlannedPostJob;
 use App\MediaType;
 use App\Models\ContentPlan;
 use App\Models\Delivery;
+use App\Models\Destination;
 use App\Models\MediaAsset;
 use App\Models\PlannedPost;
 use App\Models\Publication;
@@ -85,7 +86,11 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertSame(CandidateStatus::Selected, $bestReserve->fresh()->status);
         $this->assertSame(CandidateStatus::Reserve, $lowerReserve->fresh()->status);
         $this->assertSame(ContentPlanStatus::Rewriting, $plan->fresh()->status);
-        Queue::assertPushed(RewritePlannedPostJob::class, 1);
+        Queue::assertPushed(
+            RewritePlannedPostJob::class,
+            fn (RewritePlannedPostJob $job): bool => $job->plannedPostId === $replacement->id
+                && $job->focusedReview,
+        );
     }
 
     public function test_plan_requests_manual_replenishment_when_reserve_is_empty(): void
@@ -201,7 +206,11 @@ class EditorialPlanEnhancementsTest extends TestCase
         $this->assertSame(CandidateStatus::Selected, $candidate->fresh()->status);
         $this->assertTrue($plannedPost->scheduled_at->equalTo($slot));
         $this->assertSame(ContentPlanStatus::Rewriting, $plan->fresh()->status);
-        Queue::assertPushed(RewritePlannedPostJob::class, 1);
+        Queue::assertPushed(
+            RewritePlannedPostJob::class,
+            fn (RewritePlannedPostJob $job): bool => $job->plannedPostId === $plannedPost->id
+                && $job->focusedReview,
+        );
     }
 
     public function test_replenishment_excludes_seen_posts_and_marks_candidates_older_than_one_day(): void
@@ -798,6 +807,86 @@ class EditorialPlanEnhancementsTest extends TestCase
                 && $job->candidateTarget === 7
                 && $job->completionStatus === ContentPlanStatus::CandidateReview,
         );
+    }
+
+    public function test_candidate_review_offers_mass_approval_for_pending_news_only(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        $plan = ContentPlan::factory()->create(['status' => ContentPlanStatus::CandidateReview]);
+        $pendingCandidates = StoryCandidate::factory()->count(2)->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Pending,
+        ]);
+        $rejectedCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
+        ]);
+        $this->actingAs($user);
+        $approveAllAction = TestAction::make('approveAllCandidates')->table();
+
+        Livewire::test(StoryCandidatesRelationManager::class, [
+            'ownerRecord' => $plan,
+            'pageClass' => EditContentPlan::class,
+        ])
+            ->assertActionVisible($approveAllAction)
+            ->assertActionHasLabel($approveAllAction, 'Массово одобрить (2)')
+            ->callAction($approveAllAction)
+            ->assertNotified('Одобрено новостей: 2');
+
+        $pendingCandidates->each(
+            fn (StoryCandidate $candidate) => $this->assertSame(CandidateStatus::Approved, $candidate->fresh()->status),
+        );
+        $this->assertSame(CandidateStatus::Rejected, $rejectedCandidate->fresh()->status);
+    }
+
+    public function test_rewrite_review_offers_mass_approval_and_skips_cancelled_posts(): void
+    {
+        $user = User::factory()->create(['is_active' => true]);
+        $publication = Publication::factory()->create();
+        Destination::factory()->create(['publication_id' => $publication->id]);
+        $slots = [now()->addHour(), now()->addHours(2), now()->addHours(3)];
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'status' => ContentPlanStatus::FinalReview,
+            'slot_schedule' => collect($slots)->map->toIso8601String()->all(),
+        ]);
+        $safeCandidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $riskyCandidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $cancelledCandidate = StoryCandidate::factory()->create(['content_plan_id' => $plan->id]);
+        $safePost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $safeCandidate->id,
+            'scheduled_at' => $slots[0],
+            'status' => PlannedPostStatus::FinalReview,
+        ]);
+        $riskyPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $riskyCandidate->id,
+            'scheduled_at' => $slots[1],
+            'status' => PlannedPostStatus::Blocked,
+            'risk_flags' => ['source_conflict'],
+        ]);
+        $cancelledPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => $cancelledCandidate->id,
+            'scheduled_at' => $slots[2],
+            'status' => PlannedPostStatus::Cancelled,
+        ]);
+        $this->actingAs($user);
+        $approveAllAction = TestAction::make('approveAllRewrites')->table();
+
+        Livewire::test(PlannedPostsRelationManager::class, [
+            'ownerRecord' => $plan,
+            'pageClass' => EditContentPlan::class,
+        ])
+            ->assertActionVisible($approveAllAction)
+            ->assertActionHasLabel($approveAllAction, 'Одобрить все рерайты (2)')
+            ->callAction($approveAllAction)
+            ->assertNotified('Одобрено рерайтов: 2');
+
+        $this->assertSame(PlannedPostStatus::Approved, $safePost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::Approved, $riskyPost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::Cancelled, $cancelledPost->fresh()->status);
     }
 
     private function reserveCandidate(ContentPlan $plan, float $score): StoryCandidate

@@ -41,6 +41,40 @@ class ModerationFlowTest extends TestCase
         $this->assertDatabaseHas('moderation_actions', ['subject_id' => $candidate->id, 'user_id' => $user->id, 'action' => 'approve_candidate']);
     }
 
+    public function test_all_pending_candidates_can_be_approved_without_changing_existing_decisions(): void
+    {
+        $plan = ContentPlan::factory()->create(['status' => ContentPlanStatus::CandidateReview]);
+        $user = User::factory()->create();
+        $pendingCandidates = StoryCandidate::factory()->count(2)->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Pending,
+        ]);
+        $approvedCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Approved,
+        ]);
+        $rejectedCandidate = StoryCandidate::factory()->create([
+            'content_plan_id' => $plan->id,
+            'status' => CandidateStatus::Rejected,
+        ]);
+
+        $approved = app(ApproveStoryCandidate::class)->approveAllPending($plan, $user);
+
+        $this->assertSame(2, $approved);
+        $pendingCandidates->each(function (StoryCandidate $candidate) use ($user): void {
+            $this->assertSame(CandidateStatus::Approved, $candidate->fresh()->status);
+            $this->assertSame($user->id, $candidate->fresh()->approved_by);
+            $this->assertDatabaseHas('moderation_actions', [
+                'subject_id' => $candidate->id,
+                'user_id' => $user->id,
+                'action' => 'approve_candidate',
+            ]);
+        });
+        $this->assertSame(CandidateStatus::Approved, $approvedCandidate->fresh()->status);
+        $this->assertSame(CandidateStatus::Rejected, $rejectedCandidate->fresh()->status);
+        $this->assertSame(0, app(ApproveStoryCandidate::class)->approveAllPending($plan, $user));
+    }
+
     public function test_ai_block_can_be_approved_without_override_reason_and_creates_delivery(): void
     {
         $publication = Publication::factory()->create();
@@ -75,6 +109,97 @@ class ModerationFlowTest extends TestCase
             'action' => 'override_ai_block',
             'reason' => null,
         ]);
+    }
+
+    public function test_all_reviewable_posts_are_approved_while_cancelled_and_unready_posts_are_skipped(): void
+    {
+        $publication = Publication::factory()->create();
+        Destination::factory()->create(['publication_id' => $publication->id]);
+        $slots = collect(range(1, 6))
+            ->map(fn (int $hour): string => now()->addHours($hour)->toIso8601String())
+            ->all();
+        $plan = ContentPlan::factory()->create([
+            'publication_id' => $publication->id,
+            'status' => ContentPlanStatus::FinalReview,
+            'slot_schedule' => $slots,
+        ]);
+        $user = User::factory()->create();
+        $safePost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'scheduled_at' => $slots[0],
+            'status' => PlannedPostStatus::FinalReview,
+        ]);
+        $riskyPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'scheduled_at' => $slots[1],
+            'status' => PlannedPostStatus::Blocked,
+            'risk_flags' => ['source_conflict'],
+        ]);
+        $cancelledPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'scheduled_at' => $slots[2],
+            'status' => PlannedPostStatus::Cancelled,
+        ]);
+        $replacementPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'replaces_planned_post_id' => $cancelledPost->id,
+            'scheduled_at' => $slots[2],
+            'status' => PlannedPostStatus::FinalReview,
+        ]);
+        $alreadyApprovedPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'scheduled_at' => $slots[3],
+            'status' => PlannedPostStatus::Approved,
+            'approved_by' => $user->id,
+            'approved_at' => now(),
+        ]);
+        $unreadyPost = PlannedPost::factory()->create([
+            'content_plan_id' => $plan->id,
+            'story_candidate_id' => StoryCandidate::factory()->create(['content_plan_id' => $plan->id])->id,
+            'scheduled_at' => $slots[4],
+            'status' => PlannedPostStatus::FinalReview,
+        ]);
+        MediaAsset::factory()->for($unreadyPost, 'mediable')->create([
+            'path' => null,
+            'failed_at' => now(),
+        ]);
+
+        $result = app(ApprovePlannedPost::class)->approveAllReviewable($plan, $user);
+
+        $this->assertSame(3, $result['approved']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertCount(1, $result['errors']);
+        $this->assertSame(PlannedPostStatus::Approved, $safePost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::Approved, $riskyPost->fresh()->status);
+        $this->assertSame($user->id, $riskyPost->fresh()->override_by);
+        $this->assertSame(PlannedPostStatus::Cancelled, $cancelledPost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::Approved, $replacementPost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::Approved, $alreadyApprovedPost->fresh()->status);
+        $this->assertSame(PlannedPostStatus::FinalReview, $unreadyPost->fresh()->status);
+    }
+
+    public function test_cancelled_post_cannot_be_approved_from_a_stale_action(): void
+    {
+        $post = PlannedPost::factory()->create(['status' => PlannedPostStatus::Cancelled]);
+        $user = User::factory()->create();
+
+        try {
+            app(ApprovePlannedPost::class)->approve($post, $user);
+            $this->fail('A cancelled post should not be approved.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(
+                ['Одобрить можно только готовую публикацию на этапе проверки рерайта.'],
+                $exception->errors()['status'],
+            );
+        }
+
+        $this->assertSame(PlannedPostStatus::Cancelled, $post->fresh()->status);
+        $this->assertFalse($post->deliveries()->exists());
     }
 
     public function test_approved_candidates_are_turned_into_scheduled_rewrite_jobs(): void
