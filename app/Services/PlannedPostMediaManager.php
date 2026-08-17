@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Number;
 use Illuminate\Validation\ValidationException;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use RuntimeException;
 use Throwable;
 
@@ -355,6 +356,61 @@ class PlannedPostMediaManager
                 $asset->setAttribute('unavailable_reason', $this->unavailableReason($asset));
             })
             ->values();
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $uploads
+     * @return list<array<string, mixed>>
+     */
+    public function temporaryUploadAssets(array $uploads): array
+    {
+        return collect($uploads)
+            ->filter(fn (mixed $upload): bool => $upload instanceof TemporaryUploadedFile)
+            ->map(function (TemporaryUploadedFile $upload): ?array {
+                try {
+                    if (! $upload->exists()) {
+                        return null;
+                    }
+
+                    $mimeType = $upload->getMimeType();
+                    $type = match ($mimeType) {
+                        'image/jpeg', 'image/png', 'image/webp' => 'photo',
+                        'image/gif' => 'animation',
+                        'video/mp4' => 'video',
+                        default => null,
+                    };
+
+                    if ($type === null) {
+                        return null;
+                    }
+
+                    return [
+                        'id' => 'upload:'.$upload->getFilename(),
+                        'asset_id' => '',
+                        'type' => $type,
+                        'type_label' => match ($type) {
+                            'photo' => 'Фото',
+                            'video' => 'Видео',
+                            'animation' => 'GIF',
+                        },
+                        'source_label' => 'Своё медиа',
+                        'source_url' => null,
+                        'preview_url' => $upload->temporaryUrl(),
+                        'download_url' => null,
+                        'mime_type' => $mimeType,
+                        'size_label' => number_format($upload->getSize() / 1024 / 1024, 1, ',', ' ').' МБ',
+                        'is_failed' => false,
+                        'is_selectable' => true,
+                        'unavailable_reason' => null,
+                        'is_custom' => true,
+                    ];
+                } catch (Throwable) {
+                    return null;
+                }
+            })
+            ->filter()
+            ->values()
+            ->all();
     }
 
     /**

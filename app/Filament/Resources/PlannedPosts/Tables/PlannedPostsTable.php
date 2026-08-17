@@ -21,6 +21,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\ViewField;
 use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\View;
 use Filament\Support\Enums\FontWeight;
 use Filament\Support\Enums\Width;
@@ -165,8 +166,9 @@ class PlannedPostsTable
                             ->label('Какие фото, видео и GIF пойдут в публикацию')
                             ->helperText('Выберите файлы из источников или загрузите свои. GIF публикуется отдельно. Перетащите выбранные медиа в нужном порядке. Максимум 10.')
                             ->view('filament.forms.components.media-picker')
-                            ->viewData(fn (PlannedPost $record, PlannedPostMediaManager $mediaManager): array => [
+                            ->viewData(fn (Get $get, PlannedPost $record, PlannedPostMediaManager $mediaManager): array => [
                                 'assets' => $mediaManager->availableAssets($record),
+                                'uploadedAssets' => $mediaManager->temporaryUploadAssets($get('custom_media_uploads') ?? []),
                                 'maxBytes' => self::mediaMaxBytes(),
                             ])
                             ->rules(['array', 'max:10'])

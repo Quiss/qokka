@@ -635,6 +635,13 @@ class TelegramMediaWorkflowTest extends TestCase
             }
         };
 
+        $temporaryAssets = app(PlannedPostMediaManager::class)->temporaryUploadAssets([$upload]);
+
+        $this->assertSame('Своё медиа', $temporaryAssets[0]['source_label']);
+        $this->assertSame('Фото', $temporaryAssets[0]['type_label']);
+        $this->assertSame('0,0 МБ', $temporaryAssets[0]['size_label']);
+        $this->assertStringContainsString('/preview-file/', $temporaryAssets[0]['preview_url']);
+
         app(PlannedPostMediaManager::class)->replaceEditorSelection(
             $post,
             ['upload:'.$upload->getFilename()],

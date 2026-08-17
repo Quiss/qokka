@@ -369,6 +369,7 @@ class EditorialPlanEnhancementsTest extends TestCase
                 checkComponentUsing: fn ($component): bool => $component instanceof ViewField
                     && $component->getView() === 'filament.forms.components.media-picker'
                     && $component->getViewData()['assets']->contains('id', $sourceMedia->id)
+                    && $component->getViewData()['uploadedAssets'] === []
                     && $component->getViewData()['maxBytes'] === 500 * 1024 * 1024,
             );
         $relationManager = $component->instance();

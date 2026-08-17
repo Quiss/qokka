@@ -49,12 +49,12 @@
             disabled: @js($isDisabled),
             uploadStatePath: @js($uploadStatePath),
             maxBytes: @js($maxBytes),
-            uploadedAssets: [],
+            uploadedAssets: @js($uploadedAssets),
             uploading: false,
             uploadProgress: 0,
             uploadError: null,
             init() {
-                const allowedIds = this.assets.map((asset) => asset.id)
+                const allowedIds = [...this.assets, ...this.uploadedAssets].map((asset) => asset.id)
                 this.state = (this.state ?? [])
                     .map((id) => String(id))
                     .filter((id) => allowedIds.includes(id))
@@ -171,8 +171,14 @@
                         (filenames) => {
                             const filename = filenames[0]
                             draftAsset.id = `upload:${filename}`
-                            this.uploadedAssets.push(draftAsset)
-                            this.state = [...(this.state ?? []), draftAsset.id]
+                            this.uploadedAssets = [
+                                ...this.uploadedAssets.filter((asset) => asset.id !== draftAsset.id),
+                                draftAsset,
+                            ]
+
+                            if (! (this.state ?? []).includes(draftAsset.id)) {
+                                this.state = [...(this.state ?? []), draftAsset.id]
+                            }
                             this.uploading = false
                             this.uploadProgress = 100
                             resolve()
